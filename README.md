@@ -7,4 +7,4 @@ This is the supplementary material of the publication "Dynamic Interpolation of 
 
 Please check the folder "notebooks" for more details
 
-![](example_eddynet.png)
+![](example_qgSSH.png)
