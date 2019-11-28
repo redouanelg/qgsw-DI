@@ -1,4 +1,3 @@
-*** For the PyTorch version please visit the QGNET directory in this repository ***
 
 # qgsw-DI
 Quasigeostrophic shallow-water model for Dynamic Interpolation of SSH
