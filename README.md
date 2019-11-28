@@ -1,3 +1,4 @@
+***** for QGNET https://arxiv.org/abs/1911.08856 I am waiting authorization from CNES to share the code ******
 
 # qgsw-DI
 Quasigeostrophic shallow-water model for Dynamic Interpolation of SSH
