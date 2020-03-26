@@ -1,4 +1,4 @@
-***** for QGNET https://arxiv.org/abs/1911.08856 I am waiting authorization from CNES to share the code ******
+***** for QGNET the PyTorch version of the code https://arxiv.org/abs/1911.08856 please check the QGNET folder ******
 
 # qgsw-DI
 Quasigeostrophic shallow-water model for Dynamic Interpolation of SSH
