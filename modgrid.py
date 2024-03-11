@@ -1,4 +1,4 @@
-import numpy as numpy
+import numpy
 from math import cos,sin,pi,isnan
 
 class grid():
@@ -58,24 +58,24 @@ class grid():
     self.f01d=numpy.zeros((np))
     self.dx1d=numpy.zeros((np))
     self.dy1d=numpy.zeros((np))
-    self.indi=numpy.zeros((np), dtype=numpy.int)
-    self.indj=numpy.zeros((np), dtype=numpy.int)
-    self.vp1=numpy.zeros((np1), dtype=numpy.int)
-    self.vp2=numpy.zeros((np2), dtype=numpy.int)
-    self.vp2=numpy.zeros((np2), dtype=numpy.int)
-    self.vp2n=numpy.zeros((np2), dtype=numpy.int)
-    self.vp2nn=numpy.zeros((np2), dtype=numpy.int)
-    self.vp2s=numpy.zeros((np2), dtype=numpy.int)
-    self.vp2ss=numpy.zeros((np2), dtype=numpy.int)
-    self.vp2e=numpy.zeros((np2), dtype=numpy.int)
-    self.vp2ee=numpy.zeros((np2), dtype=numpy.int)
-    self.vp2w=numpy.zeros((np2), dtype=numpy.int)
-    self.vp2ww=numpy.zeros((np2), dtype=numpy.int)
-    self.vp2nw=numpy.zeros((np2), dtype=numpy.int)
-    self.vp2ne=numpy.zeros((np2), dtype=numpy.int)
-    self.vp2se=numpy.zeros((np2), dtype=numpy.int)
-    self.vp2sw=numpy.zeros((np2), dtype=numpy.int)
-    self.indp=numpy.zeros((ny,nx), dtype=numpy.int) 
+    self.indi=numpy.zeros((np), dtype=numpy.int64)
+    self.indj=numpy.zeros((np), dtype=numpy.int64)
+    self.vp1=numpy.zeros((np1), dtype=numpy.int64)
+    self.vp2=numpy.zeros((np2), dtype=numpy.int64)
+    self.vp2=numpy.zeros((np2), dtype=numpy.int64)
+    self.vp2n=numpy.zeros((np2), dtype=numpy.int64)
+    self.vp2nn=numpy.zeros((np2), dtype=numpy.int64)
+    self.vp2s=numpy.zeros((np2), dtype=numpy.int64)
+    self.vp2ss=numpy.zeros((np2), dtype=numpy.int64)
+    self.vp2e=numpy.zeros((np2), dtype=numpy.int64)
+    self.vp2ee=numpy.zeros((np2), dtype=numpy.int64)
+    self.vp2w=numpy.zeros((np2), dtype=numpy.int64)
+    self.vp2ww=numpy.zeros((np2), dtype=numpy.int64)
+    self.vp2nw=numpy.zeros((np2), dtype=numpy.int64)
+    self.vp2ne=numpy.zeros((np2), dtype=numpy.int64)
+    self.vp2se=numpy.zeros((np2), dtype=numpy.int64)
+    self.vp2sw=numpy.zeros((np2), dtype=numpy.int64)
+    self.indp=numpy.zeros((ny,nx), dtype=numpy.int64) 
 
     p=-1
     for i in range(ny):
