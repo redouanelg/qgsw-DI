@@ -45,7 +45,7 @@ def qgsw(Hi=None, c=None, lon=None, lat=None, tint=None, dtout=None, dt=None,obs
     else:
         hg=None
 
-    nindex_time=np.abs(tint)/dtout + 1
+    nindex_time=int(np.abs(tint)/dtout) + 1
     SSH=np.empty((nindex_time,grd.ny,grd.nx))
     SSH[index_time,:,:]=Hi  
 
