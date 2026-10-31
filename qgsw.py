@@ -38,10 +38,12 @@ def qgsw(Hi=None, c=None, lon=None, lat=None, tint=None, dtout=None, dt=None,obs
     index_time=0  
     if obsspace is not None:
         hg=np.empty((np.shape(obsspace)[0]))
-        hg[:]=np.NAN
+        hg[:]=np.nan
         iobs=np.where((way*obsspace[:,2]>=time_abs-dt/2) & (way*obsspace[:,2]<time_abs+dt/2))
         if np.size(iobs)>0:
-            hg[iobs]=griddata((lon.ravel(), lat.ravel()), h.ravel(), (obsspace[iobs,0].squeeze(), obsspace[iobs,1].squeeze()))
+            # NOTE: was `h.ravel()` here, but `h` is only defined further down.
+            # At time_abs=0 the field is the initial condition.
+            hg[iobs]=griddata((lon.ravel(), lat.ravel()), Hi.ravel(), (obsspace[iobs,0].squeeze(), obsspace[iobs,1].squeeze()))
     else:
         hg=None
 

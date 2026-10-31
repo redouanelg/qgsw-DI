@@ -23,14 +23,16 @@ def qgsw_tgl(Htraj=None, dHi=None, c=None, lon=None, lat=None, tint=None, dtout=
   index_time=0  
   if obsspace is not None:
     dhg=np.empty((np.shape(obsspace)[0]))
-    dhg[:]=np.NAN
+    dhg[:]=np.nan
     iobs=np.where((way*obsspace[:,2]>=time_abs-dt/2) & (way*obsspace[:,2]<time_abs+dt/2))
     if np.size(iobs)>0:
-      dhg[iobs]=griddata((lon.ravel(), lat.ravel()), h.ravel(), (obsspace[iobs,0].squeeze(), obsspace[iobs,1].squeeze()))
+      # NOTE: was `h.ravel()`, which is undefined here. At time_abs=0 the
+      # perturbation field is dHi.
+      dhg[iobs]=griddata((lon.ravel(), lat.ravel()), dHi.ravel(), (obsspace[iobs,0].squeeze(), obsspace[iobs,1].squeeze()))
   else:
     dhg=None
 
-  nindex_time=np.abs(tint)/dtout + 1
+  nindex_time=int(np.abs(tint)/dtout) + 1
   dSSH=np.empty((nindex_time,grd.ny,grd.nx))
   dSSH[index_time,:,:]=dHi  
 

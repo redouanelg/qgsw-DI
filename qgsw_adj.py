@@ -22,7 +22,7 @@ def qgsw_adj(Htraj=None, c=None, lon=None, lat=None, tint=None, dtout=None, dt=N
   grd=modgrid.grid(adHf,c,snu,lon,lat)
   time_abs=0.
   index_time=-1 
-  nindex_time=np.abs(tint)/dtout + 1
+  nindex_time=int(np.abs(tint)/dtout) + 1
 
   adSSH=np.empty((nindex_time,grd.ny,grd.nx))
 

@@ -129,7 +129,7 @@ def pv2h(q,hg,grd,nitr=1):
 
     # back to 2D
     h=numpy.empty((ny,nx))
-    h[:,:]=numpy.NAN
+    h[:,:]=numpy.nan
     h[grd.indi,grd.indj]=x[:]
 
 
