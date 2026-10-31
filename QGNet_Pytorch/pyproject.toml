@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qgnet-pytorch"
+version = "0.2.0"
+description = "PyTorch port of the qgsw-DI quasigeostrophic shallow-water model"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Redouane Lguensat" }]
+dependencies = [
+    "torch>=2.0",
+    "numpy>=1.20",
+    "scipy>=1.5",
+]
+
+[project.optional-dependencies]
+notebooks = ["netCDF4>=1.5", "xarray>=2023.1", "matplotlib>=3.5", "jupyter"]
+test = ["pytest>=7", "netCDF4>=1.5"]
+
+[tool.setuptools]
+# The package *is* the repository root, so map it explicitly and keep the
+# notebooks / NetCDF archives out of any built distribution.
+packages = ["QGNet_Pytorch"]
+package-dir = { "QGNet_Pytorch" = "." }
+
+[tool.setuptools.package-data]
+"QGNet_Pytorch" = []
+
+[tool.setuptools.exclude-package-data]
+"QGNet_Pytorch" = ["*.nc", "notebooks/*", "tests/*", "checkpoints/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+markers = [
+    "slow: long integrations, deselect with '-m \"not slow\"'",
+]

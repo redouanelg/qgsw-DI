@@ -1,5 +1,7 @@
 ***** for QGNET the PyTorch version of the code https://arxiv.org/abs/1911.08856 please check the QGNET folder ******
 
+***** a maintained, fully-featured PyTorch port of this model lives in [`QGNet_Pytorch/`](QGNet_Pytorch) *****
+
 # qgsw-DI
 Quasigeostrophic shallow-water model for Dynamic Interpolation of SSH
 
@@ -32,6 +34,16 @@ Please check the folder "notebooks" for more details
 | `moddyn.py` | `h2uv` (geostrophy), `qrhs` (PV tendency), plus tangent-linear/adjoint variants |
 | `qgsw.py` | forward propagator (explicit Euler on PV + one inversion per step) |
 | `qgsw_tgl.py`, `qgsw_adj.py` | tangent-linear and adjoint models |
+
+# PyTorch
+
+| folder | contents |
+|---|---|
+| [`QGNet_Pytorch/`](QGNet_Pytorch) | maintained PyTorch port: same numerics (agrees to ~5e-16 over 5 days, ~1e-15 over 30 days), runs on CPU/CUDA/MPS, differentiable with autograd, optional neural velocity correction, pytest parity suite |
+| [`QGNET/`](QGNET) | the original notebook from [arXiv:1911.08856](https://arxiv.org/abs/1911.08856), kept as published |
+
+Use autograd rather than `qgsw_tgl.py` / `qgsw_adj.py` if you need gradients;
+see the last point below.
 
 # Gotchas worth knowing
 

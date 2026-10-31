@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+.DS_Store
+build/
+dist/
+*.egg-info/
+
+# model artefacts and large inputs
+checkpoints/
+notebooks/*.gif
+notebooks/*.png
+*.pt
+NATL60*.nc
+
+# editor / assistant local settings
+.claude/
