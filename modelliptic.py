@@ -1,7 +1,4 @@
 import numpy
-from math import cos,sin,pi,isnan
-import matplotlib.pylab as plt
-import pdb
 
 def h2pv(h,grd):
     """ SSH to Q
@@ -30,28 +27,6 @@ def h2pv(h,grd):
     q[ind]=0
 
     return q,
-
-
-def get_aq_from_ah(ah,grd):
-
-    g=grd.g
-    ny,nx,=numpy.shape(grd.mask)
-    aq=numpy.empty((ny,nx,2))
-    qq= - g*grd.f0/(grd.c**2) *h
-
-    qq[1:-1,1:-1]=g/grd.f0[1:-1,1:-1]*((h[2:,1:-1]+h[:-2,1:-1]-2*h[1:-1,1:-1])/grd.dy[1:-1,1:-1]**2 \
-                                       + (h[1:-1,2:]+h[1:-1,:-2]-2*h[1:-1,1:-1])/grd.dx[1:-1,1:-1]**2) \
-    - g*grd.f0[1:-1,1:-1]/(grd.c[1:-1,1:-1]**2) *h[1:-1,1:-1]
-    # +grd.f0[1:-1,1:-1] - g*grd.f0[1:-1,1:-1]/(grd.c[1:-1,1:-1]**2) *h[1:-1,1:-1]
-    ind=numpy.where((grd.mask==1))
-    qq[ind]=- g*grd.f0[ind]/(grd.c[ind]**2) *h[ind]
-    #qq[ind]=grd.f0[ind] - g*grd.f0[ind]/(grd.c[ind]**2) *h[ind]
-    ind=numpy.where((grd.mask==0))
-    qq[ind]=0
-    q[:,:,0]=qq
-    q[:,:,1]=qq
-
-    return aq,
 
 
 def pv2h(q,hg,grd,nitr=1):
@@ -123,8 +98,6 @@ def pv2h(q,hg,grd,nitr=1):
     else: 
         s=val1/val2
     
-    #pdb.set_trace()
-    a1=numpy.dot(gg,gg)
     x=x+s*p
 
     # back to 2D

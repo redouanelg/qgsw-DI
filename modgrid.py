@@ -1,5 +1,5 @@
 import numpy
-from math import cos,sin,pi,isnan
+from math import cos,pi
 
 class grid():
 

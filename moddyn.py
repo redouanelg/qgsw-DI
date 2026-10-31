@@ -1,6 +1,4 @@
 import numpy
-from math import cos,sin,pi,isnan
-import matplotlib.pylab as plt
 
 def h2uv(h,grd):
     """ SSH to U,V

@@ -1,13 +1,8 @@
 import numpy as np
-from math import cos,sin,pi,isnan
 from scipy.interpolate import griddata
-import time
-import numpy.matlib as matlib
 import modgrid
 import moddyn
 import modelliptic
-import matplotlib.pylab as plt
-import pdb
 
 def qgsw_adj(Htraj=None, c=None, lon=None, lat=None, tint=None, dtout=None, dt=None,obsspace=None, sens=None, rappel=None,snu=None):
 
