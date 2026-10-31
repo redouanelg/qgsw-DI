@@ -38,9 +38,16 @@ def pv2h(q,hg,grd,nitr=1):
         q (2D array): Potential Vorticity field
         hg (2D array): SSH guess
         grd (Grid() object): check modgrid.py
+        nitr (int): total number of CG steps. The default of 1 performs a single
+            optimally-scaled steepest-descent step; the solve is deliberately
+            under-converged and relies on the extrapolated guess ``hg``.
 
     Returns:
-        h (2D array): SSH field. 
+        h (2D array): SSH field. Land points (mask==0) are returned as NaN.
+
+    Note:
+        Boundary rows (mask==1) become identity rows whose right-hand side is
+        taken from ``hg``, i.e. the Dirichlet condition is ``h = hg`` there.
     """
     ny,nx,=numpy.shape(hg)
     g=grd.g

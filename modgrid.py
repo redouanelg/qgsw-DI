@@ -2,6 +2,18 @@ import numpy
 from math import cos,pi
 
 class grid():
+  """Geometry pre-processing: metrics, Coriolis, mask and 1-D index tables.
+
+  Attributes of note:
+      mask: 2 = active interior, 1 = Dirichlet boundary, 0 = land (NaN in SSH).
+          The border ring is ASYMMETRIC: 2 cells at the low edges, 3 at the
+          high edges. Every interior NaN additionally flags a 5x5 halo as 1.
+      dx, dy: forward differences in metres. Note that dy carries the same
+          cos(lat) factor as dx, which is how the original model was written.
+      f0: 2*Omega*sin(lat) with Omega = 2*pi/86164 (sidereal day).
+      snu: pass 0. rather than None to activate the tendency masking in
+          moddyn.qrhs (see the note there).
+  """
 
   def __init__(self,SSH,c,snu,lon,lat):
 

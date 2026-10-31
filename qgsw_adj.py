@@ -5,7 +5,15 @@ import moddyn
 import modelliptic
 
 def qgsw_adj(Htraj=None, c=None, lon=None, lat=None, tint=None, dtout=None, dt=None,obsspace=None, sens=None, rappel=None,snu=None):
+  """Adjoint model of qgsw().
 
+  Note:
+      moddyn.qrhs_adj is only an exact transpose of moddyn.qrhs_tgl when the
+      caller projects the input/output onto mask==2 (verified: 1.9e-2 relative
+      mismatch without the projection, 8e-16 with it). The diffusion adjoint is
+      also inexact for variable dx/dy. Prefer PyTorch autograd (QGNet_Pytorch)
+      if you need an exact gradient.
+  """
   adHf=Htraj[0,:,:]*0.
  
   way=np.sign(tint)

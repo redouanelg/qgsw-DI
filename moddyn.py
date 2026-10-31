@@ -78,6 +78,11 @@ def qrhs(u,v,q,grd,way):
     Returns:
         rq (2D array): Q increment  
 
+    Note:
+        The land/boundary masking ``rq[mask<=1]=0`` lives INSIDE the
+        ``snu is not None`` branch. ``snu=0.`` and ``snu=None`` therefore give
+        different results: with ``snu=None`` the tendency is left non-zero over
+        the coastal halo. Pass ``snu=0.`` to reproduce the published runs.
     """
     rq=numpy.zeros((grd.ny,grd.nx))
 

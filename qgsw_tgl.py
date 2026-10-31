@@ -5,6 +5,7 @@ import moddyn
 import modelliptic
 
 def qgsw_tgl(Htraj=None, dHi=None, c=None, lon=None, lat=None, tint=None, dtout=None, dt=None,obsspace=None,rappel=None,snu=None):
+  """Tangent-linear model of qgsw() around the trajectory Htraj."""
  
   way=np.sign(tint)
 

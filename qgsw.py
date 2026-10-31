@@ -15,9 +15,19 @@ def qgsw(Hi=None, c=None, lon=None, lat=None, tint=None, dtout=None, dt=None,obs
         tint (scalar): Time of propagator integration in seconds. Can be positive (forward integration) or negative (backward integration)
         dtout (scalar): Time period of outputs
         dt (scalar): Propagator time step
+        obsspace (2D array): (N,3) array of [lon, lat, time] observation locations
+        Hm (2D array): mean SSH used as the nudging target (required when rappel is set)
+        rappel (scalar): Newtonian nudging rate in s^-1
+        snu (scalar): PV diffusivity in m^2/s
 
     Returns:
-        SSH: 3D array with dimensions (timesteps, height, width), SSH forecast  
+        SSH: 3D array with dimensions (timesteps, height, width), SSH forecast
+        hg: SSH interpolated at ``obsspace`` locations, or None
+
+    Note:
+        ``snu=0.`` and ``snu=None`` are NOT equivalent. The land/boundary masking
+        of the PV tendency in ``moddyn.qrhs`` only runs when ``snu is not None``.
+        Pass ``snu=0.`` to reproduce the published runs.
     """
     way=np.sign(tint)
 
