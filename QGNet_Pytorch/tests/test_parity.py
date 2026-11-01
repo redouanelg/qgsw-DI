@@ -178,7 +178,7 @@ def test_long_run_does_not_amplify_roundoff(ssh_case, numpy_model, torch_model):
 
 
 def test_observation_sampling_matches_where_the_original_works(ssh_case, numpy_model, torch_model):
-    """The original crashes if an obs falls in the first window; compare the rest."""
+    """The 2019 original crashed if an obs fell in the first window; compare the rest."""
     rng = np.random.default_rng(1)
     obs = np.stack([
         rng.uniform(ssh_case["lon"].min() + 1, ssh_case["lon"].max() - 1, 40),

@@ -60,6 +60,15 @@ class QGNetConvNet(nn.Module):
 
     The module advertises ``in_channels`` so ``qgsw.qgsw`` can check it against
     ``nn_channels`` before entering the time loop.
+
+    BatchNorm inside the time loop: ``qgsw.qgsw`` calls the network once per
+    correction update on a batch of one field. In ``train()`` mode each call
+    normalises with that field's own spatial statistics and updates the
+    running statistics, once per call; in ``eval()`` mode the running
+    statistics are used instead. The same weights therefore give a different
+    forecast in the two modes (several cm of SSH after 10 steps on the test
+    case). Evaluate in the mode you will deploy in, and expect the running
+    statistics to reflect only the last few model steps of the last rollout.
     """
 
     def __init__(self, in_channels: int = 1, hidden: int = 16,

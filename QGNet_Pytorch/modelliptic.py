@@ -43,6 +43,10 @@ def h2pv(h, grd):
     """
     h = as_tensor(h, like=grd.f0)
     g = grd.g
+    # Land holds NaN. Every stencil value that reads it is overwritten below, but
+    # autograd would still form 0 * NaN and poison the gradients wrt c, lat and
+    # lon, so land is zero-filled first. The forward result is unchanged.
+    h = torch.where(grd.mask_land, torch.zeros((), dtype=h.dtype, device=h.device), h)
     # grd.stretching == -g * f0 / c**2, precomputed; same op order as the
     # original so the result is bit-identical.
     q = grd.stretching * h

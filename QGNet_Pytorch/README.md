@@ -59,6 +59,14 @@ projects input and output onto `mask == 2` (1.9e-2 relative mismatch without the
 projection), and its diffusion term is inexact for variable `dx`. Autograd has
 no such caveat and passes `torch.autograd.gradcheck`.
 
+Gradients are finite with respect to the initial SSH, the network parameters,
+`snu`, `rappel`, `c`, `lat` and `lon`, with or without land. Land (NaN in SSH)
+is zero-filled before the stencils of `h2pv` and `h2uv` and the affected values
+are masked, so autograd never multiplies a zero gradient by NaN. This leaves
+the forward result bit-identical. To learn `c`, `lat`, `lon` or `snu`, build
+the grid every iteration rather than passing a cached `grd=`: its coefficients
+carry the graph, and a second `backward()` through them fails.
+
 ## Install
 
 ```bash
@@ -101,16 +109,19 @@ exported as `qgsw_fn` for convenience.
 | CUDA | `float64` | full parity, move every input tensor to the device first |
 | MPS (Apple) | `float32` only | PyTorch has no float64 on MPS; also measured *slower* than CPU at 113×170 |
 
-Mixing float32 and float64 inputs now promotes to the highest precision and
-warns, instead of silently demoting the run.
+Mixing float32 and float64 inputs promotes to the highest precision and warns,
+instead of silently demoting the run. This includes NumPy arrays passed next to
+tensors. NumPy-only inputs run in float64.
 
 ## Optional neural correction
 
 `qgsw.qgsw(..., nn_module=net)` evaluates `net` inside the time loop. It is fed
 `(1, len(nn_channels), ny, nx)` and must return `(1, 2, ny, nx)`: channel 0 is
-added to geostrophic `u`, channel 1 to `v`, restricted via `torch.where` to the
-exact discrete supports `qrhs` reads (`u[2:-2, 2:-1]`, `v[2:-1, 2:-2]`, interior
-water only), so a NaN emitted outside the support cannot leak into the solution.
+added to geostrophic `u`, channel 1 to `v`, restricted via `torch.where` to
+exactly the faces `qrhs` reads for interior-water cells (`mask == 2`): a `u`
+face is corrected when the cell on either side of it is interior water, and
+likewise for `v`. A NaN emitted outside those faces cannot leak into the
+solution.
 
 ### `nn_channels`
 
@@ -165,6 +176,12 @@ length regardless of cadence.
 
 A zero-output network reproduces the pure-QG trajectory exactly (`max|Δ| = 0`).
 
+`QGNetConvNet` uses BatchNorm, as the paper does. Inside the time loop it sees
+a batch of one field per call, so in `train()` mode it normalises with that
+field's statistics and updates its running statistics once per call, while
+`eval()` uses the running statistics. The same weights give different forecasts
+in the two modes; evaluate in the mode you will deploy in.
+
 ## Gotchas inherited from the original (deliberately preserved)
 
 * **`snu=0.` is not `snu=None`.** The masking `rq[mask <= 1] = 0` lives inside
@@ -190,7 +207,7 @@ pytest                                  # from this folder
 QGSW_DI_PATH=/path/to/qgsw-DI pytest    # if the NumPy model is elsewhere
 ```
 
-187 tests. `tests/test_parity.py` cross-checks every operator and whole
+249 tests. `tests/test_parity.py` cross-checks every operator and whole
 integrations (forward, backward, nudged, `snu=None`/`0`/`50`, `nitr` 1…25, with
 and without land) against the NumPy model in the parent directory; those tests
 skip if it cannot be found. `tests/test_regression.py` pins the float64 output
@@ -214,5 +231,9 @@ The shared test case `ssh.nc` is the one at the repository root.
 
 * Observation-space sampling follows the original `scipy.interpolate.griddata`
   path when `obsspace` is given. That path is CPU-only and non-differentiable.
-  The original crashes here (`UnboundLocalError`); the port does not.
+  The 2019 original crashed when an observation fell in the first window
+  (`UnboundLocalError`); the copy in this repository is patched, and the port
+  does not crash.
+* With `rappel`, `Hm` may be NaN on land only. NaN over water raises, where the
+  original silently turns the whole field NaN.
 * Grid construction follows the original mask logic exactly.

@@ -6,11 +6,17 @@ import math
 import warnings
 from typing import Any, Optional, Tuple
 
+import numpy as np
 import torch
 
 #: Floating dtypes ordered from least to most precise, used to pick a common
 #: dtype when the caller mixes precisions.
 _DTYPE_RANK = {torch.float16: 0, torch.bfloat16: 0, torch.float32: 1, torch.float64: 2}
+_NUMPY_FLOAT_DTYPES = {
+    np.dtype(np.float16): torch.float16,
+    np.dtype(np.float32): torch.float32,
+    np.dtype(np.float64): torch.float64,
+}
 
 
 def infer_dtype_device(*values: Any, dtype: Optional[torch.dtype] = None, device: Optional[Any] = None) -> Tuple[torch.dtype, torch.device]:
@@ -20,11 +26,20 @@ def infer_dtype_device(*values: Any, dtype: Optional[torch.dtype] = None, device
     warning is emitted, so a stray ``float32`` argument cannot silently demote
     a ``float64`` run (which costs ~7 digits of parity with the NumPy model).
     All tensors must live on the same device.
+
+    NumPy arrays take part in the promotion once a tensor has fixed the
+    precision, so a float32 tensor next to float64 arrays is promoted rather
+    than silently demoting them. NumPy-only inputs still run in float64.
     """
     found_dtype = None
     found_device = None
     mixed = False
+    numpy_dtypes = []
     for value in values:
+        if isinstance(value, np.ndarray):
+            if value.dtype in _NUMPY_FLOAT_DTYPES:
+                numpy_dtypes.append(_NUMPY_FLOAT_DTYPES[value.dtype])
+            continue
         if not isinstance(value, torch.Tensor):
             continue
         if found_device is None:
@@ -40,6 +55,12 @@ def infer_dtype_device(*values: Any, dtype: Optional[torch.dtype] = None, device
                 mixed = True
                 if _DTYPE_RANK.get(value.dtype, -1) > _DTYPE_RANK.get(found_dtype, -1):
                     found_dtype = value.dtype
+    if found_dtype is not None:
+        for np_dtype in numpy_dtypes:
+            if np_dtype != found_dtype:
+                mixed = True
+                if _DTYPE_RANK[np_dtype] > _DTYPE_RANK.get(found_dtype, -1):
+                    found_dtype = np_dtype
     if mixed and dtype is None:
         warnings.warn(
             f"mixed floating dtypes in inputs; promoting everything to {found_dtype}. "

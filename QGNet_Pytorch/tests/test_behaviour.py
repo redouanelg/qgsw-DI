@@ -71,6 +71,40 @@ def test_mixed_precision_promotes_and_warns():
     assert S.dtype == torch.float64, "highest precision must win"
 
 
+def test_numpy_inputs_take_part_in_promotion():
+    case = SMALL
+    with pytest.warns(RuntimeWarning, match="mixed floating dtypes"):
+        S, _ = qgsw.qgsw(
+            Hi=torch.as_tensor(case["ssh"], dtype=torch.float32),
+            c=case["c"], lon=case["lon"], lat=case["lat"],
+            tint=600.0, dtout=600.0, dt=600.0, snu=0.0,
+        )
+    assert S.dtype == torch.float64
+
+
+def test_numpy_only_inputs_run_in_float64():
+    case = SMALL
+    S, _ = qgsw.qgsw(
+        Hi=case["ssh"].astype(np.float32), c=case["c"].astype(np.float32),
+        lon=case["lon"], lat=case["lat"],
+        tint=600.0, dtout=600.0, dt=600.0, snu=0.0,
+    )
+    assert S.dtype == torch.float64
+
+
+def test_hm_nan_over_water_raises():
+    Hm = SMALL["ssh"].copy()
+    Hm[5, 5] = np.nan
+    assert np.isfinite(SMALL["ssh"][5, 5])
+    with pytest.raises(ValueError, match="Hm is NaN on cells where Hi is water"):
+        _run(SMALL, rappel=1e-5, Hm=t64(Hm))
+
+
+def test_hm_nan_on_land_is_accepted():
+    S, _ = _run(SMALL, rappel=1e-5, Hm=t64(SMALL["ssh"] * 0.9))
+    assert torch.equal(torch.isnan(S[-1]), torch.isnan(t64(SMALL["ssh"])))
+
+
 def test_device_mismatch_is_rejected():
     from QGNet_Pytorch._torch_utils import infer_dtype_device
 
@@ -247,6 +281,41 @@ def test_gradients_are_finite_with_land():
     assert int((h.grad != 0).sum()) > 0
 
 
+def _loss_wrt(name, value):
+    """Rollout loss with one physical input replaced, on the land case."""
+    kw = dict(Hi=t64(SMALL["ssh"]), c=t64(SMALL["c"]), lon=t64(SMALL["lon"]),
+              lat=t64(SMALL["lat"]), tint=1800.0, dtout=1800.0, dt=600.0, snu=0.0)
+    kw[name] = value
+    S, _ = qgsw.qgsw(**kw)
+    out = S[-1]
+    return (out[torch.isfinite(out)] ** 2).mean()
+
+
+@pytest.mark.parametrize("name", ["c", "lat", "lon", "scalar c"])
+def test_parameter_gradients_are_finite_with_land(name):
+    """Land is NaN in SSH; 0 * NaN in the backward pass used to poison these."""
+    if name == "scalar c":
+        name, p = "c", torch.tensor(1.5, dtype=torch.float64)
+    else:
+        p = t64(SMALL[name])
+    p.requires_grad_(True)
+    _loss_wrt(name, p).backward()
+    assert torch.isfinite(p.grad).all()
+    assert float(p.grad.abs().max()) > 0.0
+
+
+def test_c_gradient_matches_finite_differences_with_land():
+    c0 = t64(SMALL["c"])
+    d = torch.randn(c0.shape, dtype=torch.float64, generator=torch.Generator().manual_seed(1))
+    c = c0.clone().requires_grad_(True)
+    _loss_wrt("c", c).backward()
+    ad = float((c.grad * d).sum())
+    eps = 1e-6
+    with torch.no_grad():
+        fd = float(_loss_wrt("c", c0 + eps * d) - _loss_wrt("c", c0 - eps * d)) / (2 * eps)
+    assert ad == pytest.approx(fd, rel=1e-5)
+
+
 # ------------------------------------------------------------ neural module
 class _Zero(torch.nn.Module):
     def forward(self, x):
@@ -314,18 +383,43 @@ def test_nn_output_shape_is_validated():
 
 
 def test_nn_nan_outside_the_valid_support_cannot_leak():
-    class NanEdges(torch.nn.Module):
+    g = modgrid.grid(t64(SMALL["ssh"]), t64(SMALL["c"]), 0.0,
+                     t64(SMALL["lon"]), t64(SMALL["lat"]))
+    valid_u = qgsw._neural_u_valid_mask(g)
+    valid_v = qgsw._neural_v_valid_mask(g)
+
+    class NanOutside(torch.nn.Module):
         def forward(self, x):
             o = torch.zeros((1, 2, x.shape[2], x.shape[3]), dtype=x.dtype, device=x.device)
-            o[:, :, :2, :] = float("nan")
-            o[:, :, -3:, :] = float("inf")
-            o[:, :, :, :2] = float("nan")
-            o[:, :, :, -3:] = float("inf")
+            o[0, 0][~valid_u] = float("nan")
+            o[0, 1][~valid_v] = float("inf")
             return o
 
-    S, _ = _run(SMALL, tint=1200.0, nn_module=NanEdges())
+    S, _ = _run(SMALL, tint=1200.0, nn_module=NanOutside(), grd=g)
     ref, _ = _run(SMALL, tint=1200.0)
     assert torch.equal(torch.nan_to_num(S), torch.nan_to_num(ref))
+
+
+@pytest.mark.parametrize("snu", [0.0, None])
+def test_correction_support_is_exactly_the_faces_qrhs_reads(snu):
+    """A face is in the support iff the tendency of some active cell depends on it.
+
+    Guards against the earlier masks, which dropped the east/north face of the
+    outermost active cells (including along the coast) and so halved their
+    correction.
+    """
+    g = modgrid.grid(t64(SMALL["ssh"]), t64(SMALL["c"]), snu,
+                     t64(SMALL["lon"]), t64(SMALL["lat"]))
+    h = t64(SMALL["ssh"])
+    q, = modelliptic.h2pv(h, g)
+    u, v = moddyn.h2uv(h, g)
+    u = u.clone().requires_grad_(True)
+    v = v.clone().requires_grad_(True)
+    rq, = moddyn.qrhs(u, v, q, g, 1.0)
+    w = torch.randn(rq.shape, dtype=rq.dtype, generator=torch.Generator().manual_seed(0))
+    (rq * w)[g.mask == 2.0].sum().backward()
+    assert torch.equal(u.grad != 0, qgsw._neural_u_valid_mask(g))
+    assert torch.equal(v.grad != 0, qgsw._neural_v_valid_mask(g))
 
 
 class _ConstCorrection(torch.nn.Module):

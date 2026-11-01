@@ -14,6 +14,10 @@
 >   the correction network **SSH only**, whereas the current code feeds five
 >   channels. On a land-free domain the four extra channels are constant in
 >   time and act as positional encoding. See the README.
+> * The correction masks of §4 now cover every `u`/`v` face read by an
+>   interior-water cell (a face is corrected when the cell on either side is
+>   `mask == 2`). Previously the east/north face of the outermost interior
+>   cells, including those next to the coast, received no correction.
 > * Line numbers quoted below are stale.
 >
 > The land-handling logic it describes is otherwise still accurate.

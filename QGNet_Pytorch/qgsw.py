@@ -136,18 +136,26 @@ def _compute_neural_velocity_correction(nn_input, grd, nn_module):
 
 
 def _neural_u_valid_mask(grd):
-    """Exact discrete support of ``u`` consumed by ``qrhs``: rows 2:-2, cols 2:-1."""
+    """The ``u`` faces that ``qrhs`` reads for active (``mask == 2``) cells.
+
+    ``qrhs`` advects cell ``(i, j)`` with ``0.5*(u[i,j] + u[i,j+1])``, so a face
+    is read when the cell on either side of it is active. Masking on the face's
+    own cell alone would drop the east face of the easternmost active cells and
+    halve their correction.
+    """
     valid_mask = torch.zeros((grd.ny, grd.nx), dtype=torch.bool, device=grd.mask.device)
     if grd.ny > 4 and grd.nx > 4:
-        valid_mask[2:-2, 2:-1] = grd.mask[2:-2, 2:-1] == 2.0
+        active = grd.mask == 2.0
+        valid_mask[:, 1:] = active[:, 1:] | active[:, :-1]
     return valid_mask
 
 
 def _neural_v_valid_mask(grd):
-    """Exact discrete support of ``v`` consumed by ``qrhs``: rows 2:-1, cols 2:-2."""
+    """The ``v`` faces that ``qrhs`` reads for active cells: ``v[i,j]``, ``v[i+1,j]``."""
     valid_mask = torch.zeros((grd.ny, grd.nx), dtype=torch.bool, device=grd.mask.device)
     if grd.ny > 4 and grd.nx > 4:
-        valid_mask[2:-1, 2:-2] = grd.mask[2:-1, 2:-2] == 2.0
+        active = grd.mask == 2.0
+        valid_mask[1:, :] = active[1:, :] | active[:-1, :]
     return valid_mask
 
 
@@ -201,7 +209,8 @@ def qgsw(
             ``dt``; otherwise output frames are not evenly spaced in time.
         dt: time step in seconds.
         obsspace: optional ``(N, 3)`` array of ``[lon, lat, time]``.
-        Hm: mean SSH used as the nudging target. Required when ``rappel`` is set.
+        Hm: mean SSH used as the nudging target. Required when ``rappel`` is
+            set. It may be NaN on land only; NaN over water raises.
         rappel: Newtonian nudging rate in s^-1 applied to PV.
         snu: PV diffusivity in m^2/s. Pass ``0.`` rather than ``None`` -- see
             the warning in :func:`moddyn.qrhs`.
@@ -216,6 +225,11 @@ def qgsw(
             the cost of short rollouts during training. The grid is validated
             against ``Hi``/``c``/``snu``/``lon``/``lat`` and a mismatch raises,
             because every cached quantity on it depends on those inputs.
+            Do not reuse a grid built from ``c``/``lat``/``lon``/``snu``
+            tensors that require grad: its cached coefficients carry that
+            graph, so the second ``backward()`` fails with "Trying to backward
+            through the graph a second time". Rebuild it every iteration when
+            learning those parameters.
 
     Returns:
         ``(SSH, hg)`` where ``SSH`` has shape ``(int(|tint|/dtout)+1, ny, nx)``
@@ -228,8 +242,8 @@ def qgsw(
 
     When ``nn_module`` is provided it receives ``(1, len(nn_channels), ny, nx)``
     and must return ``(1, 2, ny, nx)``; the two output channels correct
-    geostrophic ``u`` and ``v`` before the PV RHS is evaluated, on the exact
-    discrete supports that ``qrhs`` reads.
+    geostrophic ``u`` and ``v`` before the PV RHS is evaluated, on exactly the
+    faces ``qrhs`` reads for active (``mask == 2``) cells.
 
     ``nn_channels`` defaults to ``("ssh",)``, matching the QG-Net of
     arXiv:1911.08856, whose ConvNet "takes SSH as input". The other available
@@ -303,6 +317,15 @@ def qgsw(
     if rappel is not None:
         if Hm is None:
             raise ValueError("Hm is required when rappel is not None")
+        if tuple(Hm.shape) != (grd.ny, grd.nx):
+            raise ValueError(f"Hm has shape {tuple(Hm.shape)} but Hi has {(grd.ny, grd.nx)}")
+        # A NaN in Hm over water reaches the advection stencil through Qm and
+        # turns the whole field NaN within a few steps, without any error.
+        if bool(torch.isnan(Hm)[grd.mask >= 1.0].any()):
+            raise ValueError(
+                "Hm is NaN on cells where Hi is water; its land mask must not "
+                "extend beyond that of Hi"
+            )
         Qm, = modelliptic.h2pv(Hm, grd)
 
     h = Hi.clone()

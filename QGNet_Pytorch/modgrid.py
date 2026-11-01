@@ -153,6 +153,23 @@ class grid:
         self.mask_inactive = mask <= 1.0
         self.stretching = -self.g * f0 / (c**2)  # q = ... + stretching * h
 
+        # Cells whose moddyn.h2uv stencil reaches a land cell. The original gets
+        # NaN there and zeroes it; the port zero-fills land and masks these
+        # instead, so autograd never forms 0 * NaN (see moddyn.h2uv).
+        land = self.mask_land
+        self.u_touches_land = torch.zeros((ny, nx), dtype=torch.bool, device=device)
+        self.v_touches_land = torch.zeros((ny, nx), dtype=torch.bool, device=device)
+        if ny > 2 and nx > 1:
+            self.u_touches_land[1:-1, 1:] = (
+                land[1:-1, 1:] | land[1:-1, :-1] | land[2:, :-1]
+                | land[2:, 1:] | land[:-2, 1:] | land[:-2, :-1]
+            )
+        if ny > 1 and nx > 2:
+            self.v_touches_land[1:, 1:-1] = (
+                land[1:, 1:-1] | land[1:, 2:] | land[:-1, 2:]
+                | land[:-1, 1:-1] | land[:-1, :-2] | land[1:, :-2]
+            )
+
         # Elliptic operator coefficients used by modelliptic.compute_avec.
         aaa = self.g / self.f01d
         bbb = -self.g * self.f01d / self.c1d**2

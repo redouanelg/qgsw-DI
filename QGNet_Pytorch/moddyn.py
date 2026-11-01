@@ -22,10 +22,17 @@ def h2uv(h, grd):
 
     so ``u`` lives on the western face and ``v`` on the southern face of the
     cell (Arakawa C-grid staggering). The first/last row and column are left at
-    zero. NaNs coming from land neighbours are zeroed rather than masked, which
-    is also what the original does.
+    zero. Velocities whose stencil reaches land are zero, as in the original,
+    where the NaN they pick up is zeroed.
+
+    The port zero-fills land first and then masks those velocities with
+    ``grd.u_touches_land``/``grd.v_touches_land``. The forward result is the
+    same, but autograd no longer forms ``0 * NaN``, which made the gradients
+    wrt ``lat``/``lon`` NaN as soon as the domain contained land.
     """
     h = as_tensor(h, like=grd.f0)
+    zero = torch.zeros((), dtype=h.dtype, device=h.device)
+    h = torch.where(grd.mask_land, zero, h)
     u = torch.zeros((grd.ny, grd.nx), dtype=h.dtype, device=h.device)
     v = torch.zeros((grd.ny, grd.nx), dtype=h.dtype, device=h.device)
     g = grd.g
@@ -48,6 +55,9 @@ def h2uv(h, grd):
         )
         / grd.dx[1:, 1:-1]
     )
+    u = torch.where(grd.u_touches_land, zero, u)
+    v = torch.where(grd.v_touches_land, zero, v)
+    # Still needed: f0 == 0 at the equator gives inf * 0 = NaN.
     return nan_to_zero(u), nan_to_zero(v)
 
 
