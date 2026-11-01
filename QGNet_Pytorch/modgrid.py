@@ -134,6 +134,7 @@ class grid:
         self.f0 = f0
         self.dx = dx
         self.dy = dy
+        self.nan_ssh = nan_ssh
         self.np = npoints
         self.np2 = int(self.vp2.numel())
         self.nx = nx
@@ -193,6 +194,60 @@ class grid:
             self.beta_int = None
             self.snu_over_dx2_int = None
             self.snu_over_dy2_int = None
+
+    def check_matches(self, SSH, c, snu, lon, lat):
+        """Raise if this grid was not built from equivalent inputs.
+
+        Used by :func:`qgsw.qgsw` when a caller supplies a prebuilt grid. Every
+        cached quantity on this object (``mask``, ``dx``, ``dy``, ``f0``,
+        ``aaa``, ``bbb``, ``snu_over_dx2_int``, ...) is a pure function of these
+        five arguments, so reusing a grid built from different ones silently
+        changes the physics. The cost is O(ny*nx), negligible against a run of
+        many time steps.
+        """
+
+        def same(a, b):
+            if a is None or b is None:
+                return (a is None) and (b is None)
+            if a.shape != b.shape:
+                return False
+            return bool(
+                torch.equal(torch.isnan(a), torch.isnan(b))
+                and torch.equal(torch.nan_to_num(a, nan=0.0), torch.nan_to_num(b, nan=0.0))
+            )
+
+        SSH_t = as_tensor(SSH, like=self.f0)
+        if tuple(SSH_t.shape) != (self.ny, self.nx):
+            raise ValueError(
+                f"supplied grd has shape ({self.ny}, {self.nx}) but Hi has {tuple(SSH_t.shape)}"
+            )
+
+        c_t = as_tensor(c, like=self.f0)
+        if c_t.ndim == 0:
+            c_t = torch.zeros_like(SSH_t) + c_t
+        snu_t = None if snu is None else as_tensor(snu, like=self.f0)
+
+        mismatches = []
+        # The land mask is derived from the NaN pattern of SSH, not its values.
+        if not torch.equal(torch.isnan(SSH_t), self.nan_ssh):
+            mismatches.append("Hi land/NaN pattern")
+        if not same(c_t, self.c):
+            mismatches.append("c")
+        if not same(as_tensor(lon, like=self.f0), self.lon):
+            mismatches.append("lon")
+        if not same(as_tensor(lat, like=self.f0), self.lat):
+            mismatches.append("lat")
+        if (snu_t is None) != (self.snu is None) or (
+            snu_t is not None and not bool(torch.equal(snu_t, self.snu))
+        ):
+            mismatches.append(f"snu ({snu} vs {self.snu})")
+
+        if mismatches:
+            raise ValueError(
+                "the supplied grd was built from different inputs than this call: "
+                + ", ".join(mismatches)
+                + ". Rebuild the grid, or drop the grd= argument."
+            )
 
 
 Grid = grid

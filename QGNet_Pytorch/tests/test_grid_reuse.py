@@ -4,6 +4,7 @@ from __future__ import annotations
 import importlib
 import time
 
+import numpy as np
 import pytest
 import torch
 
@@ -46,6 +47,59 @@ def test_shape_mismatch_is_rejected():
                        t64(other["lon"]), t64(other["lat"]))
     with pytest.raises(ValueError, match="supplied grd has shape"):
         qgsw.qgsw(**_args(), **CFG, grd=grd)
+
+
+# --------------------------------------------------------------------------
+# Every cached quantity on the grid is a pure function of (Hi NaN pattern, c,
+# snu, lon, lat). Reusing a grid built from different inputs must fail loudly:
+# it silently changes the physics otherwise.
+# --------------------------------------------------------------------------
+def _grid(ssh=None, c=None, snu=0.0, lon=None, lat=None):
+    return modgrid.grid(
+        t64(CASE["ssh"] if ssh is None else ssh),
+        t64(CASE["c"] if c is None else c),
+        snu,
+        t64(CASE["lon"] if lon is None else lon),
+        t64(CASE["lat"] if lat is None else lat),
+    )
+
+
+@pytest.mark.parametrize("field,build,expect", [
+    ("snu",  dict(snu=None),                              "snu"),
+    ("snu",  dict(snu=50.0),                              "snu"),
+    ("c",    dict(c=np.zeros_like(CASE["ssh"]) + 99.0),   "c"),
+    ("lon",  dict(lon=CASE["lon"] + 5.0),                 "lon"),
+    ("lat",  dict(lat=CASE["lat"] + 5.0),                 "lat"),
+])
+def test_mismatched_grid_is_rejected(field, build, expect):
+    grd = _grid(**build)
+    with pytest.raises(ValueError, match=expect):
+        qgsw.qgsw(**_args(), **CFG, grd=grd)
+
+
+def test_mismatched_land_mask_is_rejected():
+    other = CASE["ssh"].copy()
+    other[5:9, 5:9] = np.nan          # extra land -> different mask and index tables
+    grd = _grid(ssh=other)
+    with pytest.raises(ValueError, match="land/NaN pattern"):
+        qgsw.qgsw(**_args(), **CFG, grd=grd)
+
+
+def test_matching_grid_with_different_ssh_values_is_accepted():
+    """Only the NaN pattern of Hi matters, not its values: that is the whole
+    point of reusing one grid across many SSH snapshots of the same region."""
+    other = CASE["ssh"] + 0.37
+    grd = _grid(ssh=other)
+    a, _ = qgsw.qgsw(**_args(), **CFG, grd=grd)
+    b, _ = qgsw.qgsw(**_args(), **CFG)
+    assert torch.equal(torch.nan_to_num(a, nan=-1e30), torch.nan_to_num(b, nan=-1e30))
+
+
+def test_scalar_and_broadcast_c_are_equivalent_for_reuse():
+    grd = _grid(c=np.zeros_like(CASE["ssh"]) + 1.5)
+    args = dict(_args())
+    args["c"] = torch.as_tensor(1.5, dtype=torch.float64)   # scalar form
+    qgsw.qgsw(**args, **CFG, grd=grd)   # must not raise
 
 
 def test_grid_build_is_not_quadratic_in_land_points():

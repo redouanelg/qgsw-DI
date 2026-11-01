@@ -155,10 +155,12 @@ def qgsw(
             the warning in :func:`moddyn.qrhs`.
         nn_module: optional correction network, see below.
         nn_cadence_steps: how often the network is evaluated.
-        grd: optional prebuilt :class:`modgrid.grid`. Reuse it across calls that
-            share the same geometry, land mask, ``c`` and ``snu`` -- grid
+        grd: optional prebuilt :class:`modgrid.grid`. Reuse it across calls
+            that share the same geometry, land mask, ``c`` and ``snu`` -- grid
             construction is otherwise repeated on every call, which dominates
-            the cost of short rollouts during training.
+            the cost of short rollouts during training. The grid is validated
+            against ``Hi``/``c``/``snu``/``lon``/``lat`` and a mismatch raises,
+            because every cached quantity on it depends on those inputs.
 
     Returns:
         ``(SSH, hg)`` where ``SSH`` has shape ``(int(|tint|/dtout)+1, ny, nx)``
@@ -207,10 +209,10 @@ def qgsw(
 
     if grd is None:
         grd = modgrid.grid(Hi, c, snu, lon, lat)
-    elif (grd.ny, grd.nx) != tuple(Hi.shape):
-        raise ValueError(
-            f"supplied grd has shape ({grd.ny}, {grd.nx}) but Hi has {tuple(Hi.shape)}"
-        )
+    else:
+        # Every cached quantity on the grid depends on these arguments, so a
+        # mismatched cache silently changes the physics rather than failing.
+        grd.check_matches(Hi, c, snu, lon, lat)
     time_abs = 0.0
     index_time = 0
     if obsspace is not None:
