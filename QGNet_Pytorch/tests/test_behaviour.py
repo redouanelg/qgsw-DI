@@ -257,7 +257,7 @@ class _Counter(torch.nn.Module):
     def __init__(self):
         super().__init__()
         self.calls = 0
-        self.conv = torch.nn.Conv2d(5, 2, 1, bias=False).double()
+        self.conv = torch.nn.Conv2d(1, 2, 1, bias=False).double()
         torch.nn.init.zeros_(self.conv.weight)
 
     def forward(self, x):
@@ -278,7 +278,11 @@ def test_nn_cadence(cadence, expected):
     assert m.calls == expected
 
 
-def test_nn_input_has_five_channels_and_is_finite():
+def test_nn_input_defaults_to_ssh_only_and_is_finite():
+    """The default follows arXiv:1911.08856, whose ConvNet takes SSH as input.
+
+    Channel selection itself is covered in test_nn_channels.py.
+    """
     seen = {}
 
     class Spy(torch.nn.Module):
@@ -289,7 +293,7 @@ def test_nn_input_has_five_channels_and_is_finite():
 
     _run(SMALL, tint=600.0, nn_module=Spy())
     ny, nx = SMALL["ssh"].shape
-    assert seen["shape"] == (1, 5, ny, nx)
+    assert seen["shape"] == (1, 1, ny, nx)
     assert seen["finite"], "CNN input must never contain NaN/Inf"
 
 
@@ -380,8 +384,7 @@ def test_correction_matches_an_equivalent_hand_applied_velocity_offset():
     rq_man, = moddyn.qrhs(u_man, v_man, q, g, 1.0)
 
     u_c, v_c = qgsw._compute_neural_velocity_correction(
-        qgsw._neural_input(h, qgsw._static_neural_channels(g)),
-        g, _ConstCorrection(0.05, -0.02))
+        qgsw._neural_input(h, ("ssh",), {}), g, _ConstCorrection(0.05, -0.02))
     u_api, v_api = qgsw._apply_neural_velocity_correction(u, v, u_c, v_c, valid_u, valid_v)
     rq_api, = moddyn.qrhs(u_api, v_api, q, g, 1.0)
 
@@ -389,7 +392,7 @@ def test_correction_matches_an_equivalent_hand_applied_velocity_offset():
 
 
 def test_nn_gradients_flow():
-    net = torch.nn.Conv2d(5, 2, 3, padding=1).double()
+    net = torch.nn.Conv2d(1, 2, 3, padding=1).double()
     torch.nn.init.zeros_(net.bias)
     S, _ = _run(SMALL, tint=1800.0, dtout=1800.0, nn_module=net)
     out = S[-1]

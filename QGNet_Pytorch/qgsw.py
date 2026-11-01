@@ -37,6 +37,20 @@ def _fill_observations(out, iobs, h, lon, lat, obsspace):
         out[iobs] = torch.as_tensor(obs_values, dtype=out.dtype, device=out.device)
 
 
+#: Channels a correction network may be fed, see ``nn_channels``.
+#:
+#: ``"ssh"`` is the state and is rebuilt every step. The rest are pure
+#: functions of the grid: they are constant in time, so they are built once per
+#: run -- and on a single fixed domain they are constant across samples too,
+#: which is why they are NOT in the default (see the README).
+DYNAMIC_NEURAL_CHANNELS = ("ssh",)
+STATIC_NEURAL_CHANNELS = ("mask", "f0", "dx", "dy")
+NEURAL_CHANNELS = DYNAMIC_NEURAL_CHANNELS + STATIC_NEURAL_CHANNELS
+
+#: Default network input: SSH alone, as in arXiv:1911.08856.
+DEFAULT_NN_CHANNELS = ("ssh",)
+
+
 def _normalized_grid_channel(values, active, eps=1e-12):
     """Standardise ``values`` over the active cells, zero elsewhere.
 
@@ -52,23 +66,60 @@ def _normalized_grid_channel(values, active, eps=1e-12):
     return torch.where(active, normalized, torch.zeros_like(normalized))
 
 
-def _static_neural_channels(grd):
-    """Grid-only CNN channels. Constant in time, so built once per run."""
+def normalize_channel_spec(nn_channels):
+    """Validate and canonicalise an ``nn_channels`` argument to a tuple."""
+    if nn_channels is None:
+        nn_channels = DEFAULT_NN_CHANNELS
+    if isinstance(nn_channels, str):
+        nn_channels = (nn_channels,)
+    spec = tuple(nn_channels)
+    if not spec:
+        raise ValueError("nn_channels must request at least one channel")
+    unknown = [c for c in spec if c not in NEURAL_CHANNELS]
+    if unknown:
+        raise ValueError(
+            f"unknown nn_channels {unknown}; available channels are {list(NEURAL_CHANNELS)}"
+        )
+    duplicated = sorted({c for c in spec if spec.count(c) > 1})
+    if duplicated:
+        raise ValueError(f"duplicate nn_channels: {duplicated}")
+    return spec
+
+
+def _build_static_channels(grd, spec):
+    """Materialise the grid-only channels named in ``spec``, once per run."""
     active = grd.mask == 2.0
-    return torch.stack(
-        (
-            grd.mask / 2.0,
-            _normalized_grid_channel(grd.f0, active),
-            _normalized_grid_channel(grd.dx, active),
-            _normalized_grid_channel(grd.dy, active),
-        ),
-        dim=0,
-    )
+    sources = {"f0": grd.f0, "dx": grd.dx, "dy": grd.dy}
+    built = {}
+    for name in spec:
+        if name == "mask":
+            built[name] = grd.mask / 2.0
+        elif name in sources:
+            built[name] = _normalized_grid_channel(sources[name], active)
+    return built
 
 
-def _neural_input(h, static_channels):
-    ssh_channel = torch.nan_to_num(h, nan=0.0).unsqueeze(0)
-    return torch.cat((ssh_channel, static_channels), dim=0).unsqueeze(0)
+def _neural_input(h, spec, static):
+    """Stack the requested channels in the order the caller listed them."""
+    channels = [
+        torch.nan_to_num(h, nan=0.0) if name == "ssh" else static[name] for name in spec
+    ]
+    return torch.stack(channels, dim=0).unsqueeze(0)
+
+
+def _check_nn_in_channels(nn_module, expected):
+    """Fail early and clearly if the module obviously wants a different width.
+
+    Many modules (``nn.Conv2d``, and anything that copies the convention)
+    expose ``in_channels``. Without this the mismatch surfaces as an opaque
+    convolution shape error from inside the time loop.
+    """
+    declared = getattr(nn_module, "in_channels", None)
+    if isinstance(declared, int) and declared != expected:
+        raise ValueError(
+            f"nn_module.in_channels is {declared} but nn_channels requests {expected} "
+            f"channel(s). Adjust the module, or pass matching nn_channels."
+        )
 
 
 def _compute_neural_velocity_correction(nn_input, grd, nn_module):
@@ -128,6 +179,7 @@ def qgsw(
     snu=None,
     nn_module=None,
     nn_cadence_steps=1,
+    nn_channels=DEFAULT_NN_CHANNELS,
     grd=None,
 ):
     """Run the forward QG shallow-water model.
@@ -155,6 +207,9 @@ def qgsw(
             the warning in :func:`moddyn.qrhs`.
         nn_module: optional correction network, see below.
         nn_cadence_steps: how often the network is evaluated.
+        nn_channels: sequence of channel names fed to ``nn_module``, stacked in
+            the order given. Defaults to ``("ssh",)``. See
+            :data:`NEURAL_CHANNELS` for the full set.
         grd: optional prebuilt :class:`modgrid.grid`. Reuse it across calls
             that share the same geometry, land mask, ``c`` and ``snu`` -- grid
             construction is otherwise repeated on every call, which dominates
@@ -171,10 +226,25 @@ def qgsw(
     solver**; float32 drifts by ~1e-7 per simulated day, and Apple MPS supports
     float32 only.
 
-    When ``nn_module`` is provided, it receives five channels: SSH, normalised
-    mask, normalised ``f0``, normalised ``dx``, and normalised ``dy``. Its two
-    output channels correct geostrophic ``u`` and ``v`` before the PV RHS is
-    evaluated, on the exact discrete supports that ``qrhs`` reads.
+    When ``nn_module`` is provided it receives ``(1, len(nn_channels), ny, nx)``
+    and must return ``(1, 2, ny, nx)``; the two output channels correct
+    geostrophic ``u`` and ``v`` before the PV RHS is evaluated, on the exact
+    discrete supports that ``qrhs`` reads.
+
+    ``nn_channels`` defaults to ``("ssh",)``, matching the QG-Net of
+    arXiv:1911.08856, whose ConvNet "takes SSH as input". The other available
+    channels are ``"mask"`` (``grd.mask / 2``: land 0, boundary 0.5, interior
+    1) and ``"f0"``, ``"dx"``, ``"dy"`` (standardised over active interior
+    cells, zero elsewhere), e.g.::
+
+        nn_channels=("ssh", "mask")                      # land-aware
+        nn_channels=("ssh", "mask", "f0", "dx", "dy")    # multi-region
+
+    Be deliberate about the extra channels: they are pure functions of the
+    grid, so on a single fixed domain they are constant across every sample and
+    act as a positional encoding, which breaks the translation equivariance of
+    the correction and makes it non-transferable to another region.
+
     ``nn_cadence_steps`` controls how often the CNN is evaluated. A value of 1
     evaluates it every internal model step; larger values evaluate it every N
     steps and hold the latest correction in between. The held correction keeps
@@ -243,7 +313,9 @@ def qgsw(
     if nn_module is not None:
         # The grid channels and the valid-support masks never change during a
         # run; building them once keeps the step loop allocation-free.
-        static_channels = _static_neural_channels(grd)
+        nn_spec = normalize_channel_spec(nn_channels)
+        _check_nn_in_channels(nn_module, len(nn_spec))
+        static_channels = _build_static_channels(grd, nn_spec)
         valid_u = _neural_u_valid_mask(grd)
         valid_v = _neural_v_valid_mask(grd)
 
@@ -260,7 +332,7 @@ def qgsw(
         if nn_module is not None:
             if step % nn_cadence_steps == 0:
                 u_corr, v_corr = _compute_neural_velocity_correction(
-                    _neural_input(h, static_channels), grd, nn_module
+                    _neural_input(h, nn_spec, static_channels), grd, nn_module
                 )
             u, v = _apply_neural_velocity_correction(u, v, u_corr, v_corr, valid_u, valid_v)
         rq, = moddyn.qrhs(u, v, qb, grd, way)

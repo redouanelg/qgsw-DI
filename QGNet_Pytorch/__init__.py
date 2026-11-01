@@ -13,19 +13,25 @@ module keeps ``from QGNet_Pytorch import qgsw; qgsw.qgsw(...)`` working the same
 way as in the original package.
 """
 
-from . import moddyn, modelliptic, modgrid, qgsw
+from . import moddyn, modelliptic, modgrid, models, qgsw
+from .models import QGNetConvNet
 from .modgrid import Grid
 from .modgrid import grid as make_grid
+from .qgsw import DEFAULT_NN_CHANNELS, NEURAL_CHANNELS
 from .qgsw import qgsw as qgsw_fn
 
 __all__ = [
     "moddyn",
     "modelliptic",
     "modgrid",
+    "models",
     "qgsw",
     "Grid",
     "make_grid",
     "qgsw_fn",
+    "QGNetConvNet",
+    "NEURAL_CHANNELS",
+    "DEFAULT_NN_CHANNELS",
 ]
 
 __version__ = "0.2.0"
