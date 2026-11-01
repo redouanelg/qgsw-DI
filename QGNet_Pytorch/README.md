@@ -259,8 +259,14 @@ The shared test case `ssh.nc` is the one at the repository root.
   against standard QG and persistence. Runs on CPU in ~30 min. Note it uses the
   NATL60 **OSMOSIS** box shipped here, not the Gulf Stream box of the paper, so
   it demonstrates the machinery rather than replicating the published numbers.
-* `notebooks/SSHforecastingQGSW_PyTorch_multistep.ipynb` — ResUNet velocity
-  correction with a multi-day rollout curriculum.
+* `notebooks/SSHforecastingQGSW_PyTorch_multistep.ipynb` — does the hybrid
+  train, and what does it learn? Trains ResUNet corrections with a 1→3-day
+  rollout curriculum on top of a tuned QG, scores 1–5 day forecasts against
+  persistence, QG and 1- and 2-parameter physical corrections with bootstrap
+  intervals, and decomposes the learned correction (gradient-wind test,
+  amplitude scaling, uniform drift, open-boundary checks). The experiment code
+  is in `notebooks/qgnet_lab.py`; `python qgnet_lab.py train <model>` trains
+  from a terminal.
 
 ## Notes
 
