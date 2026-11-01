@@ -107,11 +107,34 @@ exported as `qgsw_fn` for convenience.
 | CPU | `float64` | reference; parity with NumPy at ~5e-16 |
 | CPU | `float32` | ~2.7e-7 drift after one simulated day |
 | CUDA | `float64` | full parity, move every input tensor to the device first |
-| MPS (Apple) | `float32` only | PyTorch has no float64 on MPS; also measured *slower* than CPU at 113×170 |
+| MPS (Apple) | `float32` only | PyTorch has no float64 on MPS. A single unbatched QG run is slower than on CPU, but a batched hybrid rollout with a ResUNet is ~6× faster (0.2 s vs 1.15 s per sample-day at 128×128 on an M2) and agrees with CPU float32 to 1e-7 m |
 
 Mixing float32 and float64 inputs promotes to the highest precision and warns,
 instead of silently demoting the run. This includes NumPy arrays passed next to
 tensors. NumPy-only inputs run in float64.
+
+### Batched integration
+
+`Hi` may be a batch `(B, ny, nx)` of independent initial states that share one
+land mask (and so one grid). They are integrated together, and `SSH` comes
+back as `(B, T, ny, nx)`. `Hm` may be `(ny, nx)` or `(B, ny, nx)`; `obsspace`
+is not supported for a batch.
+
+```python
+SSH, _ = qgsw.qgsw(Hi=ssh_days[[0, 7, 14, 21]], c=c_t, lon=lon_t, lat=lat_t,
+                   tint=3 * 86400, dtout=86400, dt=1200, snu=0.0)   # (4, 4, ny, nx)
+```
+
+Each sample gets its own line search in `pv2h`. A sample therefore agrees with
+the same sample run alone to round-off (~1e-16 in float64), not bit for bit:
+batched dot products sum in a different order. Unbatched runs are unchanged
+and still bit-identical to before.
+
+How much batching helps depends on the device:
+
+* on CPU it gives about 1.5× for plain QG and little once a network
+  dominates the cost;
+* on a GPU (CUDA, or Apple MPS) it is what makes the device worthwhile.
 
 ## Optional neural correction
 
@@ -176,6 +199,18 @@ length regardless of cadence.
 
 A zero-output network reproduces the pure-QG trajectory exactly (`max|Δ| = 0`).
 
+With a batched `Hi` the network receives `(B, C, ny, nx)` and must return
+`(B, 2, ny, nx)`.
+
+`nn_checkpoint=True` recomputes the network's activations in the backward
+pass (`torch.utils.checkpoint`) instead of storing one set per call.
+
+* **Memory:** on a 1-day, batch-16 rollout with the ResUNet it cuts peak
+  memory from 8.7 to 2.2 GB, for ~15 % more time. That is what lets longer
+  rollouts and bigger batches fit.
+* **BatchNorm caveat:** each call runs twice, so BatchNorm running
+  statistics are updated twice per call in `train()` mode.
+
 `QGNetConvNet` uses BatchNorm, as the paper does. Inside the time loop it sees
 a batch of one field per call, so in `train()` mode it normalises with that
 field's statistics and updates its running statistics once per call, while
@@ -207,7 +242,7 @@ pytest                                  # from this folder
 QGSW_DI_PATH=/path/to/qgsw-DI pytest    # if the NumPy model is elsewhere
 ```
 
-249 tests. `tests/test_parity.py` cross-checks every operator and whole
+264 tests. `tests/test_parity.py` cross-checks every operator and whole
 integrations (forward, backward, nudged, `snu=None`/`0`/`50`, `nitr` 1…25, with
 and without land) against the NumPy model in the parent directory; those tests
 skip if it cannot be found. `tests/test_regression.py` pins the float64 output

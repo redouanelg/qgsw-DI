@@ -23,7 +23,8 @@ def h2uv(h, grd):
     so ``u`` lives on the western face and ``v`` on the southern face of the
     cell (Arakawa C-grid staggering). The first/last row and column are left at
     zero. Velocities whose stencil reaches land are zero, as in the original,
-    where the NaN they pick up is zeroed.
+    where the NaN they pick up is zeroed. ``h`` may carry leading batch
+    dimensions, ``(..., ny, nx)``.
 
     The port zero-fills land first and then masks those velocities with
     ``grd.u_touches_land``/``grd.v_touches_land``. The forward result is the
@@ -33,25 +34,25 @@ def h2uv(h, grd):
     h = as_tensor(h, like=grd.f0)
     zero = torch.zeros((), dtype=h.dtype, device=h.device)
     h = torch.where(grd.mask_land, zero, h)
-    u = torch.zeros((grd.ny, grd.nx), dtype=h.dtype, device=h.device)
-    v = torch.zeros((grd.ny, grd.nx), dtype=h.dtype, device=h.device)
+    u = torch.zeros(h.shape, dtype=h.dtype, device=h.device)
+    v = torch.zeros(h.shape, dtype=h.dtype, device=h.device)
     g = grd.g
 
     # grd.g_over_f0 == g / f0, precomputed. IEEE negation is exact, so
     # (-g)/f0 and -(g/f0) are the same bit pattern.
-    u[1:-1, 1:] = (
+    u[..., 1:-1, 1:] = (
         -grd.g_over_f0[1:-1, 1:]
         * (
-            0.25 * (h[1:-1, 1:] + h[1:-1, :-1] + h[2:, :-1] + h[2:, 1:])
-            - 0.25 * (h[1:-1, 1:] + h[:-2, 1:] + h[:-2, :-1] + h[1:-1, :-1])
+            0.25 * (h[..., 1:-1, 1:] + h[..., 1:-1, :-1] + h[..., 2:, :-1] + h[..., 2:, 1:])
+            - 0.25 * (h[..., 1:-1, 1:] + h[..., :-2, 1:] + h[..., :-2, :-1] + h[..., 1:-1, :-1])
         )
         / grd.dy[1:-1, 1:]
     )
-    v[1:, 1:-1] = (
+    v[..., 1:, 1:-1] = (
         grd.g_over_f0[1:, 1:-1]
         * (
-            0.25 * (h[1:, 1:-1] + h[1:, 2:] + h[:-1, 2:] + h[:-1, 1:-1])
-            - 0.25 * (h[1:, 1:-1] + h[:-1, 1:-1] + h[:-1, :-2] + h[1:, :-2])
+            0.25 * (h[..., 1:, 1:-1] + h[..., 1:, 2:] + h[..., :-1, 2:] + h[..., :-1, 1:-1])
+            - 0.25 * (h[..., 1:, 1:-1] + h[..., :-1, 1:-1] + h[..., :-1, :-2] + h[..., 1:, :-2])
         )
         / grd.dx[1:, 1:-1]
     )
@@ -105,25 +106,25 @@ def qrhs(u, v, q, grd, way):
     u = as_tensor(u, like=grd.f0)
     v = as_tensor(v, like=grd.f0)
     q = as_tensor(q, like=grd.f0)
-    rq = torch.zeros((grd.ny, grd.nx), dtype=q.dtype, device=q.device)
+    rq = torch.zeros(q.shape, dtype=q.dtype, device=q.device)
     if grd.ny <= 4 or grd.nx <= 4:
         return (rq,)
 
-    uplus, uminus, _ = _split_flux(u[2:-2, 2:-2] + u[2:-2, 3:-1], way, minus_strict=True)
-    vplus, vminus, vscaled = _split_flux(v[2:-2, 2:-2] + v[3:-1, 2:-2], way, minus_strict=False)
+    uplus, uminus, _ = _split_flux(u[..., 2:-2, 2:-2] + u[..., 2:-2, 3:-1], way, minus_strict=True)
+    vplus, vminus, vscaled = _split_flux(v[..., 2:-2, 2:-2] + v[..., 3:-1, 2:-2], way, minus_strict=False)
 
     # grd.six_dx_int == 6*dx, grd.six_dy_int == 6*dy, grd.beta_int ==
     # (f0[i+1]-f0[i-1])/(2*dy); all precomputed by modgrid.grid.
     six_dx = grd.six_dx_int
     six_dy = grd.six_dy_int
-    qc = q[2:-2, 2:-2]
+    qc = q[..., 2:-2, 2:-2]
 
     interior = (
-        rq[2:-2, 2:-2]  # zeros; kept so the operation order matches the original
-        - uplus / six_dx * (2.0 * q[2:-2, 3:-1] + 3.0 * qc - 6.0 * q[2:-2, 1:-3] + q[2:-2, :-4])
-        + uminus / six_dx * (q[2:-2, 4:] - 6.0 * q[2:-2, 3:-1] + 3.0 * qc + 2.0 * q[2:-2, 1:-3])
-        - vplus / six_dy * (2.0 * q[3:-1, 2:-2] + 3.0 * qc - 6.0 * q[1:-3, 2:-2] + q[:-4, 2:-2])
-        + vminus / six_dy * (q[4:, 2:-2] - 6.0 * q[3:-1, 2:-2] + 3.0 * qc + 2.0 * q[1:-3, 2:-2])
+        rq[..., 2:-2, 2:-2]  # zeros; kept so the operation order matches the original
+        - uplus / six_dx * (2.0 * q[..., 2:-2, 3:-1] + 3.0 * qc - 6.0 * q[..., 2:-2, 1:-3] + q[..., 2:-2, :-4])
+        + uminus / six_dx * (q[..., 2:-2, 4:] - 6.0 * q[..., 2:-2, 3:-1] + 3.0 * qc + 2.0 * q[..., 2:-2, 1:-3])
+        - vplus / six_dy * (2.0 * q[..., 3:-1, 2:-2] + 3.0 * qc - 6.0 * q[..., 1:-3, 2:-2] + q[..., :-4, 2:-2])
+        + vminus / six_dy * (q[..., 4:, 2:-2] - 6.0 * q[..., 3:-1, 2:-2] + 3.0 * qc + 2.0 * q[..., 1:-3, 2:-2])
     )
     # vscaled is exactly `way * 0.5 * (v[2:-2,2:-2] + v[3:-1,2:-2])`.
     interior = interior - grd.beta_int * vscaled
@@ -131,11 +132,11 @@ def qrhs(u, v, q, grd, way):
     if grd.snu is not None:
         interior = (
             interior
-            + grd.snu_over_dx2_int * (q[2:-2, 3:-1] + q[2:-2, 1:-3] - 2.0 * qc)
-            + grd.snu_over_dy2_int * (q[3:-1, 2:-2] + q[1:-3, 2:-2] - 2.0 * qc)
+            + grd.snu_over_dx2_int * (q[..., 2:-2, 3:-1] + q[..., 2:-2, 1:-3] - 2.0 * qc)
+            + grd.snu_over_dy2_int * (q[..., 3:-1, 2:-2] + q[..., 1:-3, 2:-2] - 2.0 * qc)
         )
-        rq[2:-2, 2:-2] = interior
-        rq[grd.mask_inactive] = 0.0
+        rq[..., 2:-2, 2:-2] = interior
+        rq[..., grd.mask_inactive] = 0.0
     else:
-        rq[2:-2, 2:-2] = interior
+        rq[..., 2:-2, 2:-2] = interior
     return (rq,)

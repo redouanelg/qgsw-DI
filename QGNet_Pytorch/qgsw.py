@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import torch
+import torch.utils.checkpoint
 from scipy.interpolate import griddata
 
 try:
@@ -100,11 +101,17 @@ def _build_static_channels(grd, spec):
 
 
 def _neural_input(h, spec, static):
-    """Stack the requested channels in the order the caller listed them."""
+    """Stack the requested channels in the order the caller listed them.
+
+    ``h`` is ``(ny, nx)`` or ``(B, ny, nx)``; the result is ``(B, C, ny, nx)``
+    with ``B = 1`` for an unbatched run.
+    """
+    hb = h if h.ndim == 3 else h.unsqueeze(0)
     channels = [
-        torch.nan_to_num(h, nan=0.0) if name == "ssh" else static[name] for name in spec
+        torch.nan_to_num(hb, nan=0.0) if name == "ssh" else static[name].expand_as(hb)
+        for name in spec
     ]
-    return torch.stack(channels, dim=0).unsqueeze(0)
+    return torch.stack(channels, dim=1)
 
 
 def _check_nn_in_channels(nn_module, expected):
@@ -122,16 +129,26 @@ def _check_nn_in_channels(nn_module, expected):
         )
 
 
-def _compute_neural_velocity_correction(nn_input, grd, nn_module):
-    """Evaluate ``nn_module`` and split its two channels into (u_corr, v_corr)."""
-    correction = nn_module(nn_input)
+def _compute_neural_velocity_correction(nn_input, grd, nn_module, batched=False, checkpoint=False):
+    """Evaluate ``nn_module`` and split its two channels into (u_corr, v_corr).
+
+    Returns ``(B, ny, nx)`` fields when ``batched``, ``(ny, nx)`` otherwise.
+    ``checkpoint`` recomputes the module's activations in the backward pass
+    instead of storing them.
+    """
+    if checkpoint:
+        correction = torch.utils.checkpoint.checkpoint(nn_module, nn_input, use_reentrant=False)
+    else:
+        correction = nn_module(nn_input)
     if not isinstance(correction, torch.Tensor):
         raise TypeError("nn_module must return a torch.Tensor")
-    expected_shape = (1, 2, grd.ny, grd.nx)
+    expected_shape = (nn_input.shape[0], 2, grd.ny, grd.nx)
     if tuple(correction.shape) != expected_shape:
         raise ValueError(
             f"nn_module must return shape {expected_shape}, got {tuple(correction.shape)}"
         )
+    if batched:
+        return correction[:, 0], correction[:, 1]
     return correction[0, 0], correction[0, 1]
 
 
@@ -189,6 +206,7 @@ def qgsw(
     nn_cadence_steps=1,
     nn_channels=DEFAULT_NN_CHANNELS,
     grd=None,
+    nn_checkpoint=False,
 ):
     """Run the forward QG shallow-water model.
 
@@ -200,7 +218,9 @@ def qgsw(
         h^n+1  = pv2h(q^n+1, hguess=2*h^n - h^n-1)
 
     Args:
-        Hi: initial SSH, 2-D, metres. NaN marks land.
+        Hi: initial SSH, metres, ``(ny, nx)`` or a batch ``(B, ny, nx)`` of
+            independent initial states integrated together. NaN marks land;
+            every sample of a batch must share the same land mask.
         c: first baroclinic phase speed, m/s. 2-D or scalar.
         lon, lat: 2-D degree grids.
         tint: integration time in seconds. A negative value integrates
@@ -210,12 +230,18 @@ def qgsw(
         dt: time step in seconds.
         obsspace: optional ``(N, 3)`` array of ``[lon, lat, time]``.
         Hm: mean SSH used as the nudging target. Required when ``rappel`` is
-            set. It may be NaN on land only; NaN over water raises.
+            set. ``(ny, nx)``, or ``(B, ny, nx)`` for one target per sample.
+            It may be NaN on land only; NaN over water raises.
         rappel: Newtonian nudging rate in s^-1 applied to PV.
         snu: PV diffusivity in m^2/s. Pass ``0.`` rather than ``None`` -- see
             the warning in :func:`moddyn.qrhs`.
         nn_module: optional correction network, see below.
         nn_cadence_steps: how often the network is evaluated.
+        nn_checkpoint: recompute the network's activations in the backward
+            pass instead of storing them (``torch.utils.checkpoint``). Memory
+            then grows with the number of solver steps, not of network
+            activations. Every call is evaluated twice, so BatchNorm running
+            statistics are updated twice per call in ``train()`` mode.
         nn_channels: sequence of channel names fed to ``nn_module``, stacked in
             the order given. Defaults to ``("ssh",)``. See
             :data:`NEURAL_CHANNELS` for the full set.
@@ -232,8 +258,15 @@ def qgsw(
             learning those parameters.
 
     Returns:
-        ``(SSH, hg)`` where ``SSH`` has shape ``(int(|tint|/dtout)+1, ny, nx)``
-        and ``hg`` holds the SSH sampled at ``obsspace`` (or ``None``).
+        ``(SSH, hg)`` where ``SSH`` has shape ``(int(|tint|/dtout)+1, ny, nx)``,
+        or ``(B, int(|tint|/dtout)+1, ny, nx)`` for a batched ``Hi``, and
+        ``hg`` holds the SSH sampled at ``obsspace`` (or ``None``; not
+        supported for a batch).
+
+    Batched runs give each sample its own PV-inversion line search, so a
+    sample agrees with the same sample run alone to round-off (~1e-16); the
+    network sees the whole batch at once, ``(B, C, ny, nx)``, and must return
+    ``(B, 2, ny, nx)``.
 
     Inputs can be NumPy arrays or torch tensors. Outputs are torch tensors on
     the inferred input device. **Use float64 for parity with the original
@@ -274,6 +307,17 @@ def qgsw(
 
     dtype, device = infer_dtype_device(Hi, c, lon, lat, Hm)
     Hi = as_tensor(Hi, dtype=dtype, device=device)
+    if Hi.ndim not in (2, 3):
+        raise ValueError(f"Hi must be (ny, nx) or (B, ny, nx), got shape {tuple(Hi.shape)}")
+    batched = Hi.ndim == 3
+    if batched:
+        # One grid serves the whole batch, and the grid's land mask comes from
+        # the NaN pattern of SSH, so every sample must share it.
+        if not bool((torch.isnan(Hi) == torch.isnan(Hi[0])).all()):
+            raise ValueError("every sample of a batched Hi must have the same land (NaN) pattern")
+        if obsspace is not None:
+            raise NotImplementedError("obsspace sampling is not supported for a batched Hi")
+    Hi2d = Hi[0] if batched else Hi
     c = as_tensor(c, dtype=dtype, device=device)
     lon = as_tensor(lon, dtype=dtype, device=device)
     lat = as_tensor(lat, dtype=dtype, device=device)
@@ -292,11 +336,11 @@ def qgsw(
         raise ValueError("nn_cadence_steps must be a positive integer")
 
     if grd is None:
-        grd = modgrid.grid(Hi, c, snu, lon, lat)
+        grd = modgrid.grid(Hi2d, c, snu, lon, lat)
     else:
         # Every cached quantity on the grid depends on these arguments, so a
         # mismatched cache silently changes the physics rather than failing.
-        grd.check_matches(Hi, c, snu, lon, lat)
+        grd.check_matches(Hi2d, c, snu, lon, lat)
     time_abs = 0.0
     index_time = 0
     if obsspace is not None:
@@ -306,8 +350,8 @@ def qgsw(
         hg = None
 
     nindex_time = int(tint_abs / dtout) + 1
-    SSH = torch.empty((nindex_time, grd.ny, grd.nx), dtype=dtype, device=device)
-    SSH[index_time, :, :] = Hi
+    SSH = torch.empty(Hi.shape[:-2] + (nindex_time, grd.ny, grd.nx), dtype=dtype, device=device)
+    SSH[..., index_time, :, :] = Hi
 
     nstep = int(tint_abs / dt)
     stepout = int(dtout / dt)
@@ -317,11 +361,11 @@ def qgsw(
     if rappel is not None:
         if Hm is None:
             raise ValueError("Hm is required when rappel is not None")
-        if tuple(Hm.shape) != (grd.ny, grd.nx):
-            raise ValueError(f"Hm has shape {tuple(Hm.shape)} but Hi has {(grd.ny, grd.nx)}")
+        if tuple(Hm.shape) not in ((grd.ny, grd.nx), tuple(Hi.shape)):
+            raise ValueError(f"Hm has shape {tuple(Hm.shape)} but Hi has {tuple(Hi.shape)}")
         # A NaN in Hm over water reaches the advection stencil through Qm and
         # turns the whole field NaN within a few steps, without any error.
-        if bool(torch.isnan(Hm)[grd.mask >= 1.0].any()):
+        if bool(torch.isnan(Hm)[..., grd.mask >= 1.0].any()):
             raise ValueError(
                 "Hm is NaN on cells where Hi is water; its land mask must not "
                 "extend beyond that of Hi"
@@ -355,7 +399,8 @@ def qgsw(
         if nn_module is not None:
             if step % nn_cadence_steps == 0:
                 u_corr, v_corr = _compute_neural_velocity_correction(
-                    _neural_input(h, nn_spec, static_channels), grd, nn_module
+                    _neural_input(h, nn_spec, static_channels), grd, nn_module,
+                    batched=batched, checkpoint=nn_checkpoint,
                 )
             u, v = _apply_neural_velocity_correction(u, v, u_corr, v_corr, valid_u, valid_v)
         rq, = moddyn.qrhs(u, v, qb, grd, way)
@@ -366,7 +411,7 @@ def qgsw(
         h, = modelliptic.pv2h(q, hguess, grd)
 
         if (step + 1) % stepout == 0 and index_time < nindex_time:
-            SSH[index_time, :, :] = h
+            SSH[..., index_time, :, :] = h
 
         if obsspace is not None:
             _fill_observations(hg, _observation_indices(obsspace, way, time_abs, dt), h, lon, lat, obsspace)
