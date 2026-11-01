@@ -27,7 +27,9 @@ def qgsw_adj(Htraj=None, c=None, lon=None, lat=None, tint=None, dtout=None, dt=N
   index_time=-1 
   nindex_time=int(np.abs(tint)/dtout) + 1
 
-  adSSH=np.empty((nindex_time,grd.ny,grd.nx))
+  # np.full(NaN) rather than np.empty: an output frame that never gets written
+  # is then visibly invalid instead of being uninitialised memory.
+  adSSH=np.full((nindex_time,grd.ny,grd.nx),np.nan)
 
   nstep=int(abs(tint)/dt)
   stepout=int(dtout/dt)
@@ -201,8 +203,13 @@ def qgsw_adj(Htraj=None, c=None, lon=None, lat=None, tint=None, dtout=None, dt=N
     Jd=sensongrid(obsspace,sens,iobs,grd)
   else:
     Jd= +azeros
-  if (np.mod(step,stepout)==0):
-    adSSH[index_time,:,:]=+adhout+Jd 
+  # NOTE: this used to test `np.mod(step,stepout)==0` on the loop variable left
+  # over from the final iteration (step==nstep-1), which is false for the usual
+  # settings. The last frame was therefore never written and the function
+  # returned uninitialised memory for it. This block is the final output: write
+  # it whenever there is a slot for it.
+  if index_time<nindex_time:
+    adSSH[index_time,:,:]=+adhout+Jd
   
  
  # pdb.set_trace()

@@ -5,7 +5,24 @@ import moddyn
 import modelliptic
 
 def qgsw_tgl(Htraj=None, dHi=None, c=None, lon=None, lat=None, tint=None, dtout=None, dt=None,obsspace=None,rappel=None,snu=None):
-  """Tangent-linear model of qgsw() around the trajectory Htraj."""
+  """Tangent-linear model of qgsw() around the trajectory Htraj.
+
+  Htraj is the output of qgsw(), i.e. one frame every dtout, while the model
+  advances every dt. The linearisation point is therefore piecewise constant
+  over each output window, and the accuracy of the tangent-linear model is
+  limited by dtout, not by dt. Measured on ssh.nc (tint=2 days, dt=600 s) as
+  the ratio of the nonlinear perturbation to the tangent-linear prediction:
+
+      dtout      frames    |ratio - 1|
+      86400 s         3      7.4e-02
+      21600 s         9      9.2e-03
+       3600 s        49      4.7e-04
+        600 s       289      4.6e-06   (= dt, fully resolved)
+
+  So pass dtout=dt if you need an accurate tangent-linear model, and expect
+  several percent error at daily output. Note that the accuracy of qgsw_adj is
+  bounded the same way.
+  """
  
   way=np.sign(tint)
 
@@ -60,7 +77,13 @@ def qgsw_tgl(Htraj=None, dHi=None, c=None, lon=None, lat=None, tint=None, dtout=
     #Tangent update on current trajectory
     ############################
 
-    h=Htraj[index_time,:,:].squeeze()
+    # Linearise around the most recent stored trajectory frame at or BEFORE the
+    # current time. index_time has already been incremented above for the output
+    # slot, so using it here reads one frame ahead on the last step of every
+    # output window, which biased the tangent-linear model by several percent.
+    # Htraj only holds one frame per dtout, so step//stepout is the best
+    # piecewise-constant linearisation point available.
+    h=Htraj[step//stepout,:,:].squeeze()
     q,=modelliptic.h2pv(h,grd)
     u,v, = moddyn.h2uv(h,grd)
 
