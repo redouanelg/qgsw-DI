@@ -60,6 +60,15 @@ def _split_flux(a, way, minus_strict=True):
 
     Returns ``(plus, minus, scaled)`` where ``scaled = way * 0.5 * a`` is the
     unsplit value, reused by the beta term instead of being recomputed.
+
+    Note:
+        Reusing ``scaled`` for the beta term, and folding ``way * 0.5`` into it
+        rather than into the beta coefficient, is bit-exact ONLY because
+        ``way`` is +-1 and ``0.5`` is a power of two: both scalings are then
+        exact in IEEE754 and the reassociation cannot change any rounding.
+        ``way`` comes from ``_torch_utils.sign_scalar``, which can only return
+        +-1.0 or 0.0. An arbitrary ``way`` would break bit parity with the
+        NumPy model (measured: ``way=3`` differs on ~18% of cells).
     """
     scaled = way * 0.5 * a
     zero = torch.zeros_like(scaled)

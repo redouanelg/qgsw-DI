@@ -1,5 +1,23 @@
 # Land-Pixel Support Review — `SSHforecastingQGSW_PyTorch_multistep.ipynb`
 
+> **Status note.** This audit was written against an earlier revision of the
+> package and parts of it are now out of date:
+>
+> * The NaN-halo expansion is no longer a Python loop with per-cell host syncs.
+>   It is a vectorised `max_pool2d` dilation (`modgrid.py`), bit-identical to
+>   the loop and ~11x faster, so §2 and the "fastest practical hit" remark in
+>   the bottom line no longer apply.
+> * Grid construction can now be hoisted out of the loop entirely by passing
+>   `grd=` to `qgsw.qgsw(...)`, which the training notebook does.
+> * The CNN input channels described in §4 are under review: the paper this
+>   work follows ([arXiv:1911.08856](https://arxiv.org/abs/1911.08856)) feeds
+>   the correction network **SSH only**, whereas the current code feeds five
+>   channels. On a land-free domain the four extra channels are constant in
+>   time and act as positional encoding. See the README.
+> * Line numbers quoted below are stale.
+>
+> The land-handling logic it describes is otherwise still accurate.
+
 Going deeper, here's a careful audit of the land-pixel path through every stage. Short version: yes, end-to-end it works for NaN-encoded land, **including the U-Net** — but a few real (mild) issues are worth knowing.
 
 ## 1. Data loader — only one rough edge

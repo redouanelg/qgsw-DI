@@ -1,4 +1,9 @@
-"""Bit-level parity against the original NumPy qgsw-DI implementation.
+"""Machine-precision parity against the original NumPy qgsw-DI implementation.
+
+NOT bit-level: ``torch.cos``/``torch.sin``/``torch.dot`` do not agree with their
+NumPy counterparts in the last place, so a handful of grid cells and the CG line
+search differ by 1-2 ULP. Everything stays at machine epsilon and does not
+amplify over thousands of steps. ``test_regression.py`` is the bit-level guard.
 
 These tests are skipped when qgsw-DI cannot be found. Point QGSW_DI_PATH at a
 checkout to enable them.
@@ -69,17 +74,29 @@ def test_grid_scalars(grids):
         assert int(getattr(gn, attr)) == int(getattr(gt, attr)), attr
 
 
-def test_grid_dx_is_within_a_few_ulp(grids):
-    """dx is the only attribute that is not bit-identical.
+@pytest.mark.parametrize("attr", ["dx", "dy", "f0", "dx1d", "dy1d", "f01d"])
+def test_metric_attributes_are_within_a_few_ulp(grids, attr):
+    """The float metrics are *not* bit-identical, only ULP-identical.
 
-    ``math.cos`` (scalar libm, used by the NumPy original) and the vectorised
-    ``torch.cos`` kernel round differently in the last place; squaring and
-    square-rooting turns that into at most a couple of ULP on ``dx``.
+    ``dx`` picks up ``torch.cos`` vs ``math.cos`` and ``f0`` picks up
+    ``torch.sin`` vs ``numpy.sin``; both round differently in the last place.
+    This test pins how large that may get, so a real regression in the metric
+    formulas cannot hide behind "it's just floating point".
     """
     gn, gt = grids
-    d = np.abs(gn.dx - npy(gt.dx))
-    ulp = np.where(gn.dx != 0, d / np.spacing(np.abs(gn.dx) + 1e-300), 0.0)
-    assert ulp.max() <= 4.0, f"dx differs by {ulp.max():.1f} ULP"
+    x = np.asarray(getattr(gn, attr), dtype="float64")
+    y = npy(getattr(gt, attr))
+    d = np.abs(x - y)
+    ulp = np.where(x != 0, d / np.spacing(np.abs(x) + 1e-300), 0.0)
+    assert ulp.max() <= 4.0, f"{attr} differs by {ulp.max():.1f} ULP"
+
+
+def test_index_tables_and_mask_are_exactly_equal(grids):
+    """The integer bookkeeping and the land mask admit no floating-point excuse."""
+    gn, gt = grids
+    for attr in ("mask", "indi", "indj", "vp1", "vp2", "indp",
+                 "vp2n", "vp2s", "vp2e", "vp2w"):
+        assert np.array_equal(np.asarray(getattr(gn, attr)), npy(getattr(gt, attr))), attr
 
 
 # ----------------------------------------------------------------- operators

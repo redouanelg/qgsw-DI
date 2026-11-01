@@ -324,6 +324,70 @@ def test_nn_nan_outside_the_valid_support_cannot_leak():
     assert torch.equal(torch.nan_to_num(S), torch.nan_to_num(ref))
 
 
+class _ConstCorrection(torch.nn.Module):
+    """Emit a constant (u_corr, v_corr) so each channel can be probed alone."""
+
+    def __init__(self, u_amp, v_amp):
+        super().__init__()
+        self.u_amp = u_amp
+        self.v_amp = v_amp
+
+    def forward(self, x):
+        o = torch.zeros((1, 2, x.shape[2], x.shape[3]), dtype=x.dtype, device=x.device)
+        o[0, 0] = self.u_amp
+        o[0, 1] = self.v_amp
+        return o
+
+
+@pytest.mark.parametrize("u_amp,v_amp,label", [(0.05, 0.0, "u"), (0.0, 0.05, "v")])
+def test_each_correction_channel_is_actually_wired_up(u_amp, v_amp, label):
+    """Guards against a channel being dropped, zeroed or swapped.
+
+    Without this, multiplying ``u_corr`` by 0 in qgsw.py passes the whole suite:
+    the zero-network and gradient tests are both blind to one channel going
+    missing.
+    """
+    ref, _ = _run(SMALL, tint=1800.0, dtout=1800.0)
+    got, _ = _run(SMALL, tint=1800.0, dtout=1800.0,
+                  nn_module=_ConstCorrection(u_amp, v_amp))
+    d = (ref[-1] - got[-1]).abs()
+    d = d[torch.isfinite(d)]
+    assert float(d.max()) > 1e-9, f"{label}_corr channel has no effect on the solution"
+
+
+def test_correction_channels_are_not_swapped():
+    """u_corr must reach u and v_corr must reach v, not the other way round."""
+    a, _ = _run(SMALL, tint=1800.0, dtout=1800.0, nn_module=_ConstCorrection(0.05, 0.0))
+    b, _ = _run(SMALL, tint=1800.0, dtout=1800.0, nn_module=_ConstCorrection(0.0, 0.05))
+    d = (a[-1] - b[-1]).abs()
+    d = d[torch.isfinite(d)]
+    assert float(d.max()) > 1e-9, "u and v corrections are indistinguishable"
+
+
+def test_correction_matches_an_equivalent_hand_applied_velocity_offset():
+    """A constant correction must equal adding the same offset to h2uv output
+    on the exact discrete support qrhs reads."""
+    g = modgrid.grid(t64(SMALL["ssh"]), t64(SMALL["c"]), 0.0,
+                     t64(SMALL["lon"]), t64(SMALL["lat"]))
+    h = t64(SMALL["ssh"])
+    q, = modelliptic.h2pv(h, g)
+    u, v = moddyn.h2uv(h, g)
+
+    valid_u = qgsw._neural_u_valid_mask(g)
+    valid_v = qgsw._neural_v_valid_mask(g)
+    u_man = u + torch.where(valid_u, torch.full_like(u, 0.05), torch.zeros_like(u))
+    v_man = v + torch.where(valid_v, torch.full_like(v, -0.02), torch.zeros_like(v))
+    rq_man, = moddyn.qrhs(u_man, v_man, q, g, 1.0)
+
+    u_c, v_c = qgsw._compute_neural_velocity_correction(
+        qgsw._neural_input(h, qgsw._static_neural_channels(g)),
+        g, _ConstCorrection(0.05, -0.02))
+    u_api, v_api = qgsw._apply_neural_velocity_correction(u, v, u_c, v_c, valid_u, valid_v)
+    rq_api, = moddyn.qrhs(u_api, v_api, q, g, 1.0)
+
+    assert torch.equal(rq_man, rq_api)
+
+
 def test_nn_gradients_flow():
     net = torch.nn.Conv2d(5, 2, 3, padding=1).double()
     torch.nn.init.zeros_(net.bias)

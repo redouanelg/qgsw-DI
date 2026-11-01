@@ -8,11 +8,35 @@ an optional neural correction on the geostrophic velocity (the QGNet idea of
 This folder lives inside the `qgsw-DI` repository; the NumPy reference model it
 is validated against is one directory up.
 
-The port is **bit-faithful**: on `ssh.nc` in float64 it agrees with the NumPy
-original to `max|Δ| ≈ 5e-16` after 5 days and `1.3e-15` after 30 days
-(4320 steps), and every grid attribute matches except `dx`, which differs by a
-couple of ULP because the vectorised `torch.cos` and the scalar `math.cos`
-round differently. See `tests/test_parity.py`.
+## Numerical parity
+
+The port reproduces the NumPy original to **machine precision** — not bit for
+bit. On `ssh.nc` in float64:
+
+| | max\|Δ\| |
+|---|---|
+| `h2pv`, `h2uv`, `qrhs`, `pv2h` | ≤ 4.4e-16 |
+| 5-day run (720 steps) | 5.6e-16 |
+| 30-day run (4320 steps) | 1.3e-15 |
+
+The difference grows about 3× over 4320 steps, i.e. sub-linearly: roundoff does
+not amplify. See `tests/test_parity.py`.
+
+The residual is unavoidable, because NumPy and PyTorch do not produce identical
+results for the same elementary operations:
+
+- `torch.cos` vs `math.cos` → `dx` differs on ~5% of cells by ≤ 2 ULP,
+- `torch.sin` vs `numpy.sin` → `f0` differs on ~3% of cells by 1 ULP,
+- `torch.dot` vs `numpy.dot` use different summation orders, which perturbs the
+  conjugate-gradient line search in `pv2h` at the last-bit level.
+
+All index tables (`indi`, `indj`, `vp1`, `vp2`, `vp2n/s/e/w`, `indp`) and the
+land mask are exactly equal; `dy` happens to be exact on a regular lon/lat mesh
+because its `cos(lat)` factor multiplies a zero longitude increment.
+
+What *is* bit-exact is the internal refactoring: `tests/test_regression.py`
+pins the float64 output byte-for-byte, so the performance work in `modgrid`,
+`moddyn` and `modelliptic` is verified to change no bits at all.
 
 ## Module layout
 
