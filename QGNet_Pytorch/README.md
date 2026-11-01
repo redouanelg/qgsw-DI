@@ -46,6 +46,7 @@ pins the float64 output byte-for-byte, so the performance work in `modgrid`,
 | `modelliptic.py` | `h2pv` (SSH → PV), `pv2h` (PV inversion), `compute_avec` |
 | `moddyn.py` | `h2uv` (geostrophy), `qrhs` (PV tendency) |
 | `qgsw.py` | forward propagator + neural-correction plumbing |
+| `models.py` | `QGNetConvNet`, the paper's 2545-parameter correction network |
 | `_torch_utils.py` | dtype/device helpers |
 
 The public function and return convention match the NumPy version. Inputs may be
@@ -105,25 +106,56 @@ warns, instead of silently demoting the run.
 
 ## Optional neural correction
 
-`qgsw.qgsw(..., nn_module=net)` evaluates `net` inside the time loop. It receives
-a tensor of shape `(1, 5, ny, nx)`:
+`qgsw.qgsw(..., nn_module=net)` evaluates `net` inside the time loop. It is fed
+`(1, len(nn_channels), ny, nx)` and must return `(1, 2, ny, nx)`: channel 0 is
+added to geostrophic `u`, channel 1 to `v`, restricted via `torch.where` to the
+exact discrete supports `qrhs` reads (`u[2:-2, 2:-1]`, `v[2:-1, 2:-2]`, interior
+water only), so a NaN emitted outside the support cannot leak into the solution.
 
-| channel | content |
+### `nn_channels`
+
+```python
+qgsw.qgsw(..., nn_module=net, nn_channels=("ssh",))                      # default
+qgsw.qgsw(..., nn_module=net, nn_channels=("ssh", "mask"))               # land present
+qgsw.qgsw(..., nn_module=net, nn_channels=("ssh", "mask", "f0", "dx", "dy"))
+```
+
+| name | content |
 |---|---|
-| 0 | SSH with NaN replaced by 0 |
-| 1 | mask / 2 → land `0`, boundary `0.5`, interior water `1` |
-| 2 | normalised `f0` |
-| 3 | normalised `dx` |
-| 4 | normalised `dy` |
+| `"ssh"` | SSH with NaN replaced by 0 — the only channel that carries state |
+| `"mask"` | `grd.mask / 2` → land `0`, boundary `0.5`, interior water `1` |
+| `"f0"`, `"dx"`, `"dy"` | standardised over active interior-water cells, zero elsewhere |
 
-Channels 2–4 are standardised over active interior-water cells and zeroed
-elsewhere; they are constant in time and built once per run. Longitude and
-latitude are not passed directly.
+Channels are stacked in the order given; names are validated, and if the module
+exposes `in_channels` (as `nn.Conv2d` and `QGNetConvNet` do) a width mismatch is
+caught before the time loop starts.
 
-The module must return `(1, 2, ny, nx)`. Channel 0 is added to geostrophic `u`
-and channel 1 to `v`, restricted via `torch.where` to the exact discrete
-supports `qrhs` reads (`u[2:-2, 2:-1]`, `v[2:-1, 2:-2]`, interior water only), so
-a NaN emitted outside the support cannot leak into the solution.
+**The default is `("ssh",)` because that is what the paper specifies.**
+arXiv:1911.08856 describes "a NN component that takes SSH as input", and its
+stated 2545 parameters only add up with a single input channel.
+
+Be deliberate before adding the others. They are pure functions of the grid, so
+on a single fixed domain they are *constant across every sample* and act purely
+as a positional encoding: that breaks the translation equivariance of the
+correction, invites overfitting to the box, and destroys the property the paper
+cares about — that the trained ConvNet is a portable `SSH → (du, dv)` map you
+can unplug and drop into another model. `"mask"` earns its place when the domain
+actually contains land; `"f0"`/`"dx"`/`"dy"` only start to matter if you train
+across several regions or resolutions.
+
+### Reference network
+
+`QGNetConvNet` is the paper's exact architecture, 2545 parameters:
+
+```python
+from QGNet_Pytorch import QGNetConvNet
+
+net = QGNetConvNet()           # Conv(1→16,3) BN lReLU Conv(16→16,3) BN lReLU Conv(16→2,1) × scale
+assert sum(p.numel() for p in net.parameters()) == 2545
+```
+
+The trailing `scale` parameter starts at zero, so an untrained model reproduces
+standard QG bit for bit and training departs from it smoothly.
 
 `nn_cadence_steps` controls the evaluation frequency. With `dt=600`,
 `nn_cadence_steps=6` gives an hourly correction update while the dynamics still
@@ -168,10 +200,15 @@ The shared test case `ssh.nc` is the one at the repository root.
 
 ## Example notebooks
 
-* `notebooks/validation_vs_numpy.ipynb` — reproduces the NumPy↔PyTorch parity
-  figures and error metrics on `ssh.nc`.
+* `notebooks/validation_vs_numpy.ipynb` — NumPy↔PyTorch parity figures and
+  error metrics on `ssh.nc`.
+* `notebooks/qgnet_velocity_correction.ipynb` — the QG-Net hybrid experiment:
+  trains `QGNetConvNet` to correct the geostrophic velocity and compares
+  against standard QG and persistence. Runs on CPU in ~30 min. Note it uses the
+  NATL60 **OSMOSIS** box shipped here, not the Gulf Stream box of the paper, so
+  it demonstrates the machinery rather than replicating the published numbers.
 * `notebooks/SSHforecastingQGSW_PyTorch_multistep.ipynb` — ResUNet velocity
-  correction trained on NATL60 patches with a multi-day rollout curriculum.
+  correction with a multi-day rollout curriculum.
 
 ## Notes
 
